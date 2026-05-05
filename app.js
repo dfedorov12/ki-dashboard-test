@@ -144,6 +144,18 @@ async function getToken() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Popup-Kontext: MSAL leitet nach Login hierher zurück — nur Token verarbeiten
+  if (window.opener && window.opener !== window) {
+    const inst = new msal.PublicClientApplication({
+      auth: { clientId: CLIENT_ID, authority: `https://login.microsoftonline.com/${TENANT_ID}`,
+              redirectUri: location.href.split('?')[0].split('#')[0] },
+      cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+    });
+    await inst.initialize();
+    await inst.handleRedirectPromise();
+    return;
+  }
+
   $id('boot-spinner').style.display = 'block';
   try {
     const loggedIn = await initAuth();
