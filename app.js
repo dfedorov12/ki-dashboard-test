@@ -104,37 +104,62 @@ let editLizenzId = null;
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
 // ═══════════════════════════════════════════════════════════════════
-const msalConfig = {
-  auth: {
-    clientId: CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-    redirectUri: location.origin + location.pathname,
-  },
-  cache: { cacheLocation: 'sessionStorage' }
-};
-const loginScopes = { scopes: ['https://graph.microsoft.com/Sites.ReadWrite.All', 'openid', 'profile'] };
+const SCOPES = ['https://graph.microsoft.com/Sites.ReadWrite.All', 'User.Read'];
 
-window.addEventListener('DOMContentLoaded', () => {
-  msalInstance = new msal.PublicClientApplication(msalConfig);
-  msalInstance.handleRedirectPromise().then(r => {
-    if (r) msalInstance.setActiveAccount(r.account);
-    const accs = msalInstance.getAllAccounts();
-    if (accs.length) { account = accs[0]; msalInstance.setActiveAccount(account); startApp(); }
-    else showAuth();
-  }).catch(() => showAuth());
-});
-
-function login() {
-  msalInstance.loginPopup(loginScopes).then(r => {
-    account = r.account; msalInstance.setActiveAccount(account); startApp();
-  }).catch(e => console.error(e));
+async function initAuth() {
+  const redirectUri = location.href.split('?')[0].split('#')[0];
+  msalInstance = new msal.PublicClientApplication({
+    auth: { clientId: CLIENT_ID, authority: `https://login.microsoftonline.com/${TENANT_ID}`, redirectUri },
+    cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+  });
+  await msalInstance.initialize();
+  await msalInstance.handleRedirectPromise();
+  const accs = msalInstance.getAllAccounts();
+  if (accs.length) { account = accs[0]; msalInstance.setActiveAccount(account); return true; }
+  return false;
 }
+
+async function doLogin() {
+  $id('boot-btn').style.display = 'none';
+  $id('boot-sub').textContent   = 'Anmeldung läuft…';
+  $id('boot-spinner').style.display = 'block';
+  try {
+    const r = await msalInstance.loginPopup({ scopes: SCOPES });
+    account  = r.account;
+    msalInstance.setActiveAccount(account);
+    await boot();
+  } catch(e) {
+    $id('boot-err').textContent        = e.message;
+    $id('boot-spinner').style.display  = 'none';
+    $id('boot-btn').style.display      = 'block';
+    $id('boot-btn').textContent        = 'Erneut versuchen';
+  }
+}
+
 function logout() { msalInstance.logoutPopup({ postLogoutRedirectUri: location.href }); }
 
 async function getToken() {
-  try   { return (await msalInstance.acquireTokenSilent({ ...loginScopes, account })).accessToken; }
-  catch { return (await msalInstance.acquireTokenPopup(loginScopes)).accessToken; }
+  try   { return (await msalInstance.acquireTokenSilent({ scopes: SCOPES, account })).accessToken; }
+  catch { return (await msalInstance.acquireTokenPopup({ scopes: SCOPES })).accessToken; }
 }
+
+document.addEventListener('DOMContentLoaded', async () => {
+  $id('boot-spinner').style.display = 'block';
+  try {
+    const loggedIn = await initAuth();
+    if (loggedIn) {
+      await boot();
+    } else {
+      $id('boot-sub').textContent       = 'Bitte melden Sie sich an.';
+      $id('boot-spinner').style.display = 'none';
+      $id('boot-btn').style.display     = 'block';
+    }
+  } catch(e) {
+    $id('boot-err').textContent        = e.message;
+    $id('boot-spinner').style.display  = 'none';
+    $id('boot-btn').style.display      = 'block';
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // GRAPH API
@@ -160,10 +185,8 @@ const gDel   = url        => gFetch(url, { method: 'DELETE' });
 // ═══════════════════════════════════════════════════════════════════
 // STARTUP
 // ═══════════════════════════════════════════════════════════════════
-async function startApp() {
-  showApp();
-  $id('user-name').textContent = account.name || account.username;
-
+async function boot() {
+  $id('boot-sub').textContent = 'Daten werden geladen…';
   try {
     const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
     siteId = site.id;
@@ -186,6 +209,12 @@ async function startApp() {
       }
     }
 
+    $id('boot').style.display = 'none';
+    $id('app').style.display  = 'flex';
+
+    const name = account?.name || account?.username || '';
+    $id('user-name').textContent = name;
+
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
     } else {
@@ -194,18 +223,11 @@ async function startApp() {
 
     renderAntragForm();
   } catch(e) {
-    console.error(e);
-    alert('Initialisierungsfehler: ' + e.message);
+    $id('boot-err').textContent       = 'Fehler: ' + e.message;
+    $id('boot-spinner').style.display = 'none';
+    $id('boot-btn').style.display     = 'block';
+    $id('boot-btn').textContent       = 'Erneut versuchen';
   }
-}
-
-function showAuth() {
-  $id('auth-overlay').classList.remove('hidden');
-  $id('app').classList.add('hidden');
-}
-function showApp() {
-  $id('auth-overlay').classList.add('hidden');
-  $id('app').classList.remove('hidden');
 }
 
 // ═══════════════════════════════════════════════════════════════════

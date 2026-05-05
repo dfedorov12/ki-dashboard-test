@@ -4,23 +4,26 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>DIHAG · KI-Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="style.css"/>
   <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 </head>
 <body>
 
-<!-- Auth Overlay -->
-<div id="auth-overlay" class="auth-overlay">
-  <div class="auth-card">
-    <div class="auth-icon">🤖</div>
-    <h1>KI-Dashboard</h1>
-    <p>DIHAG Gruppe · KI-Governance</p>
-    <button id="btn-login" class="btn btn-primary btn-lg" onclick="login()">Mit Microsoft anmelden</button>
-  </div>
+<!-- Boot Screen -->
+<div id="boot">
+  <div class="boot-logo">🤖</div>
+  <div class="boot-title">KI-Dashboard</div>
+  <div class="boot-sub" id="boot-sub">DIHAG Gruppe · KI-Governance</div>
+  <div class="boot-spinner" id="boot-spinner"></div>
+  <div class="boot-err" id="boot-err"></div>
+  <button class="boot-btn" id="boot-btn" onclick="doLogin()" style="display:none">Mit Microsoft anmelden</button>
 </div>
 
 <!-- App -->
-<div id="app" class="app hidden">
+<div id="app" class="app" style="display:none">
 
   <header class="header">
     <div class="header-inner">
