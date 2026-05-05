@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>DIHAG · KI-Dashboard</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+</head>
+<body>
+
+<!-- Auth Overlay -->
+<div id="auth-overlay" class="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-icon">🤖</div>
+    <h1>KI-Dashboard</h1>
+    <p>DIHAG Gruppe · KI-Governance</p>
+    <button id="btn-login" class="btn btn-primary btn-lg" onclick="login()">Mit Microsoft anmelden</button>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" class="app hidden">
+
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <span class="header-icon">🤖</span>
+        <div>
+          <span class="header-title">KI-Dashboard</span>
+          <span class="header-sub">DIHAG Gruppe</span>
+        </div>
+      </div>
+      <div class="header-user">
+        <span id="user-name" class="user-name"></span>
+        <span id="gremium-badge" class="gremium-badge hidden">Gremium</span>
+        <button class="btn btn-ghost btn-sm" onclick="logout()">Abmelden</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="nav-tab active" data-view="antrag" onclick="switchView('antrag')">
+      📝 Neuer Antrag
+    </button>
+    <button class="nav-tab" data-view="antraege" onclick="switchView('antraege')">
+      📋 Anträge
+      <span id="badge-open" class="tab-badge hidden"></span>
+    </button>
+    <button class="nav-tab" data-view="lizenzen" onclick="switchView('lizenzen')">
+      🔑 Lizenzen
+    </button>
+  </nav>
+
+  <main class="main">
+
+    <!-- VIEW: Neuer Antrag -->
+    <div id="view-antrag" class="view active">
+      <div class="view-header">
+        <h2>KI-Antrag einreichen</h2>
+        <p class="view-desc">Antrag zur Freigabe eines KI-Systems gemäß Anlage 1 der KI-Richtlinie (CO-10-01). Das KI-Koordinierungsgremium prüft und entscheidet über die Freigabe.</p>
+      </div>
+      <div id="antrag-success" class="success-banner hidden"></div>
+      <form id="form-antrag" class="form-card" onsubmit="submitAntrag(event)" novalidate>
+        <div id="form-antrag-fields"></div>
+        <div class="form-footer">
+          <button type="submit" class="btn btn-primary" id="btn-submit">Antrag einreichen</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- VIEW: Anträge -->
+    <div id="view-antraege" class="view hidden">
+      <div class="view-header-row">
+        <div>
+          <h2>KI-Anträge</h2>
+          <p id="antraege-sub" class="view-desc"></p>
+        </div>
+        <div class="toolbar">
+          <select id="filter-status" class="filter-select" onchange="filterAntraege()">
+            <option value="">Alle Status</option>
+            <option value="Eingereicht">Eingereicht</option>
+            <option value="In Prüfung">In Prüfung</option>
+            <option value="Genehmigt">Genehmigt</option>
+            <option value="Abgelehnt">Abgelehnt</option>
+            <option value="Rückfrage">Rückfrage</option>
+          </select>
+          <select id="filter-risk" class="filter-select" onchange="filterAntraege()">
+            <option value="">Alle Risiken</option>
+            <option value="Geringes Risiko">Geringes Risiko</option>
+            <option value="Normales Risiko">Normales Risiko</option>
+            <option value="Hohes Risiko">Hohes Risiko</option>
+            <option value="Verboten">Verboten</option>
+          </select>
+        </div>
+      </div>
+      <div id="antraege-loading" class="loading-state">Lade Anträge …</div>
+      <div id="antraege-list" class="card-grid"></div>
+    </div>
+
+    <!-- VIEW: Lizenzen -->
+    <div id="view-lizenzen" class="view hidden">
+      <div class="view-header-row">
+        <div>
+          <h2>Lizenzmanagement</h2>
+          <p class="view-desc">Alle KI-Lizenzen der DIHAG-Gruppe</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openLizenzModal()">+ Neue Lizenz</button>
+      </div>
+      <div id="lizenzen-loading" class="loading-state">Lade Lizenzen …</div>
+      <div id="lizenzen-wrap"></div>
+    </div>
+
+  </main>
+
+  <!-- Side Panel -->
+  <div id="panel-overlay" class="panel-overlay hidden" onclick="closePanel()"></div>
+  <aside id="side-panel" class="side-panel hidden">
+    <div class="panel-header">
+      <div id="panel-title" class="panel-title"></div>
+      <button class="panel-close" onclick="closePanel()">✕</button>
+    </div>
+    <div id="panel-body" class="panel-body"></div>
+  </aside>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="closeModal(event)">
+    <div class="modal-card" id="modal-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span id="modal-title" class="modal-title"></span>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
