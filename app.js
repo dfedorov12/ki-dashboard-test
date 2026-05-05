@@ -6,7 +6,7 @@
 const CLIENT_ID    = '37e2a0cc-37b9-4eb5-b2a1-2ca0d9a62db0';
 const TENANT_ID    = 'fdb70646-023a-403b-a4b9-1f474a935123';
 const SP_HOST      = 'dihag.sharepoint.com';
-const SP_SITE_PATH = '/sites/gruppe_shb';
+const SP_SITE_PATH = '/sites/IT';
 const LIST_ANTRAEGE = 'KI_Antraege';
 const LIST_LIZENZEN = 'KI_Lizenzen';
 
