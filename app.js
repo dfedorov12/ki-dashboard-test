@@ -185,7 +185,12 @@ async function gFetch(url, opts = {}) {
   const full  = url.startsWith('http') ? url : `https://graph.microsoft.com/v1.0${url}`;
   const res   = await fetch(full, {
     ...opts,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly',
+      ...(opts.headers || {})
+    }
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
