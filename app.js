@@ -188,8 +188,10 @@ async function gFetch(url, opts = {}) {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers || {}) }
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(err?.error?.message || res.statusText), { status: res.status });
+    const errBody = await res.json().catch(() => ({}));
+    const detail  = errBody?.error?.message || errBody?.error?.code || res.statusText || res.status;
+    console.error('Graph API error', res.status, JSON.stringify(errBody));
+    throw Object.assign(new Error(`${res.status}: ${detail}`), { status: res.status, graphError: errBody });
   }
   return res.status === 204 ? null : res.json();
 }
@@ -326,7 +328,7 @@ async function submitAntrag(e) {
     const el = $id(`f-${f.key}`);
     if (!el) continue;
     const v = el.value.trim();
-    if (v) fields[f.key] = v;
+    if (v) fields[f.key] = spValue(f.type, v);
   }
 
   try {
@@ -638,7 +640,7 @@ async function saveLizenz() {
     const el = $id(`lf-${f.key}`);
     if (!el) continue;
     const v = el.value.trim();
-    if (v !== '') fields[f.key] = (f.type === 'number') ? parseFloat(v) : v;
+    if (v !== '') fields[f.key] = spValue(f.type, v);
   }
 
   if (!fields.Title) { alert('Bitte Lizenzname eingeben.'); return; }
@@ -795,6 +797,13 @@ function closeModal(e) {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════
 function $id(id) { return document.getElementById(id); }
+
+// Konvertiert Formulareingabe in den von der Graph API erwarteten Typ
+function spValue(type, v) {
+  if (type === 'number') return parseFloat(v);
+  if (type === 'date')   return v ? new Date(v).toISOString() : null;
+  return v;
+}
 
 function esc(s) {
   if (s === null || s === undefined) return '';
