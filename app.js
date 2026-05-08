@@ -213,26 +213,33 @@ async function boot() {
   try {
     const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
     siteId = site.id;
-    console.log('Site ID:', siteId);
 
-    // Listen direkt per internem URL-Namen abrufen (zuverlässiger als displayName-Filter)
-    const [resA, resL, resR] = await Promise.allSettled([
-      gGet(`/sites/${siteId}/lists/${LIST_ANTRAEGE}?$select=id,displayName,name`),
-      gGet(`/sites/${siteId}/lists/${LIST_LIZENZEN}?$select=id,displayName,name`),
-      gGet(`/sites/${siteId}/lists/${LIST_REGISTER}?$select=id,displayName,name`),
-    ]);
-
-    if (resA.status === 'fulfilled') {
-      listAntragId = resA.value.id;
-      console.log('Antraege list:', resA.value.displayName, listAntragId);
-    } else {
-      console.warn('Antraege list nicht gefunden:', resA.reason?.message);
+    // Alle Listen der Site abrufen und per internem URL-Namen (name-Feld) zuordnen
+    // Das ist zuverlässiger als displayName- oder Pfad-Lookup
+    let allLists = [];
+    let nextUrl = `/sites/${siteId}/lists?$select=id,displayName,name&$top=200`;
+    while (nextUrl) {
+      const page = await gGet(nextUrl);
+      allLists = allLists.concat(page.value || []);
+      nextUrl = page['@odata.nextLink'] || null;
     }
 
-    if (resL.status === 'fulfilled') {
-      listLizenzId = resL.value.id;
-      console.log('Lizenzen list:', resL.value.displayName, listLizenzId);
-      // Lesezugriff auf Lizenzen = Gremium-Mitglied
+    const findList = internalName => allLists.find(
+      l => l.name?.toLowerCase() === internalName.toLowerCase() ||
+           l.displayName?.toLowerCase() === internalName.toLowerCase()
+    );
+
+    const lA = findList(LIST_ANTRAEGE);
+    const lL = findList(LIST_LIZENZEN);
+    const lR = findList(LIST_REGISTER);
+
+    if (lA) { listAntragId  = lA.id; console.log('KI_Antraege →',  lA.displayName, lA.id); }
+    else     { console.warn('Liste nicht gefunden:', LIST_ANTRAEGE,
+                 'Verfügbar:', allLists.map(l => `${l.name}(${l.displayName})`).join(', ')); }
+
+    if (lL) {
+      listLizenzId = lL.id;
+      console.log('KI_Lizenzen →', lL.displayName, lL.id);
       try {
         await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
         isGremium = true;
@@ -240,21 +247,32 @@ async function boot() {
         if (e.status !== 403) console.warn('Lizenzliste Lesezugriff:', e.message);
       }
     } else {
-      console.warn('Lizenzen list nicht gefunden:', resL.reason?.message);
+      console.warn('Liste nicht gefunden:', LIST_LIZENZEN);
     }
 
-    if (resR.status === 'fulfilled') {
-      listRegisterId = resR.value.id;
-      console.log('Register list:', resR.value.displayName, listRegisterId);
-    } else {
-      console.warn('Register list nicht gefunden:', resR.reason?.message);
-    }
+    if (lR) { listRegisterId = lR.id; console.log('KI_Register →',  lR.displayName, lR.id); }
+    else     { console.warn('Liste nicht gefunden:', LIST_REGISTER); }
 
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
 
     const name = account?.name || account?.username || '';
     $id('user-name').textContent = name;
+
+    // Diagnose-Banner: zeigt welche Listen gefunden wurden
+    const missing = [
+      !listAntragId  && LIST_ANTRAEGE,
+      !listLizenzId  && LIST_LIZENZEN,
+      !listRegisterId && LIST_REGISTER,
+    ].filter(Boolean);
+    if (missing.length) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background:#fef3c7;border:1px solid #f59e0b;padding:8px 16px;font-size:13px;color:#92400e';
+      banner.textContent = '⚠️ Folgende SharePoint-Listen konnten nicht gefunden werden: ' + missing.join(', ')
+        + '. Bitte prüfen Sie die internen Listennamen. Verfügbare Listen: '
+        + allLists.filter(l => l.name?.startsWith('KI')).map(l => l.name).join(', ') || '(keine KI-Listen)';
+      document.querySelector('.nav-tabs').after(banner);
+    }
 
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
