@@ -208,27 +208,42 @@ async function boot() {
   try {
     const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
     siteId = site.id;
+    console.log('Site ID:', siteId);
 
+    // Listen direkt per internem URL-Namen abrufen (zuverlässiger als displayName-Filter)
     const [resA, resL, resR] = await Promise.allSettled([
-      gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_ANTRAEGE}'&$select=id`),
-      gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_LIZENZEN}'&$select=id`),
-      gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_REGISTER}'&$select=id`),
+      gGet(`/sites/${siteId}/lists/${LIST_ANTRAEGE}?$select=id,displayName,name`),
+      gGet(`/sites/${siteId}/lists/${LIST_LIZENZEN}?$select=id,displayName,name`),
+      gGet(`/sites/${siteId}/lists/${LIST_REGISTER}?$select=id,displayName,name`),
     ]);
 
-    if (resA.status === 'fulfilled') listAntragId = resA.value.value?.[0]?.id;
-
-    if (resL.status === 'fulfilled' && resL.value.value?.[0]?.id) {
-      const tmpId = resL.value.value[0].id;
-      try {
-        await gGet(`/sites/${siteId}/lists/${tmpId}/items?$top=1`);
-        listLizenzId = tmpId;
-        isGremium    = true;
-      } catch(e) {
-        if (e.status !== 403) console.warn('Lizenzliste:', e.message);
-      }
+    if (resA.status === 'fulfilled') {
+      listAntragId = resA.value.id;
+      console.log('Antraege list:', resA.value.displayName, listAntragId);
+    } else {
+      console.warn('Antraege list nicht gefunden:', resA.reason?.message);
     }
 
-    if (resR.status === 'fulfilled') listRegisterId = resR.value.value?.[0]?.id;
+    if (resL.status === 'fulfilled') {
+      listLizenzId = resL.value.id;
+      console.log('Lizenzen list:', resL.value.displayName, listLizenzId);
+      // Lesezugriff auf Lizenzen = Gremium-Mitglied
+      try {
+        await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
+        isGremium = true;
+      } catch(e) {
+        if (e.status !== 403) console.warn('Lizenzliste Lesezugriff:', e.message);
+      }
+    } else {
+      console.warn('Lizenzen list nicht gefunden:', resL.reason?.message);
+    }
+
+    if (resR.status === 'fulfilled') {
+      listRegisterId = resR.value.id;
+      console.log('Register list:', resR.value.displayName, listRegisterId);
+    } else {
+      console.warn('Register list nicht gefunden:', resR.reason?.message);
+    }
 
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
@@ -239,7 +254,13 @@ async function boot() {
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
     } else {
+      // Nicht-Gremium: Lizenzen ausblenden, Register bleibt sichtbar (Read-only)
       document.querySelector('[data-view="lizenzen"]').style.display = 'none';
+    }
+
+    // Register-Tab ausblenden wenn Liste nicht erreichbar
+    if (!listRegisterId) {
+      document.querySelector('[data-view="register"]').style.display = 'none';
     }
 
     renderAntragForm();
