@@ -53,6 +53,9 @@
     <button class="nav-tab" data-view="lizenzen" onclick="switchView('lizenzen')">
       🔑 Lizenzen
     </button>
+    <button class="nav-tab" data-view="register" onclick="switchView('register')">
+      📚 KI-Register
+    </button>
   </nav>
 
   <main class="main">
@@ -99,6 +102,33 @@
       </div>
       <div id="antraege-loading" class="loading-state">Lade Anträge …</div>
       <div id="antraege-list" class="card-grid"></div>
+    </div>
+
+    <!-- VIEW: KI-Register -->
+    <div id="view-register" class="view hidden">
+      <div class="view-header-row">
+        <div>
+          <h2>KI-Register</h2>
+          <p class="view-desc">Alle freigegebenen und registrierten KI-Systeme der DIHAG-Gruppe</p>
+        </div>
+        <div class="toolbar">
+          <select id="reg-filter-status" class="filter-select" onchange="filterRegister()">
+            <option value="">Alle Status</option>
+            <option value="Aktiv">Aktiv</option>
+            <option value="Inaktiv">Inaktiv</option>
+            <option value="Archiviert">Archiviert</option>
+          </select>
+          <select id="reg-filter-risk" class="filter-select" onchange="filterRegister()">
+            <option value="">Alle Risiken</option>
+            <option value="Geringes Risiko">Geringes Risiko</option>
+            <option value="Normales Risiko">Normales Risiko</option>
+            <option value="Hohes Risiko">Hohes Risiko</option>
+            <option value="Verboten">Verboten</option>
+          </select>
+        </div>
+      </div>
+      <div id="register-loading" class="loading-state">Lade KI-Register …</div>
+      <div id="register-wrap"></div>
     </div>
 
     <!-- VIEW: Lizenzen -->

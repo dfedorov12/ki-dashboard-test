@@ -7,8 +7,21 @@ const CLIENT_ID    = '0eda579d-f557-430b-b69d-1afe3ee12fdd';
 const TENANT_ID    = 'fdb70646-023a-403b-a4b9-1f474a935123';
 const SP_HOST      = 'dihag.sharepoint.com';
 const SP_SITE_PATH = '/sites/IT';
-const LIST_ANTRAEGE = 'KI_Antraege';
-const LIST_LIZENZEN = 'KI_Lizenzen';
+const LIST_ANTRAEGE  = 'KI_Antraege';
+const LIST_LIZENZEN  = 'KI_Lizenzen';
+const LIST_REGISTER  = 'KI_Register';
+
+// KI-Register Spaltennamen
+const COL_REG = {
+  status:        'Status',
+  risiko:        'Risikokategorie',
+  verantw:       'VerantwortlicheStelle',
+  hersteller:    'Hersteller',
+  nutzungsart:   'InterneExterneNutzung',
+  freigabeDatum: 'FreigabeDatum',
+  anbieter:      'Anbieter',
+  notizen:       'Notizen',
+};
 
 // SP-interne Spaltennamen (sofern abweichend von Anzeigenamme anpassen)
 const COL = {
@@ -95,9 +108,9 @@ const LIZENZ_FIELDS = [
 // STATE
 // ═══════════════════════════════════════════════════════════════════
 let msalInstance, account;
-let siteId, listAntragId, listLizenzId;
+let siteId, listAntragId, listLizenzId, listRegisterId;
 let isGremium = false;
-let allAntraege = [], allLizenzen = [];
+let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antrag';
 let editLizenzId = null;
 
@@ -194,9 +207,10 @@ async function boot() {
     const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
     siteId = site.id;
 
-    const [resA, resL] = await Promise.allSettled([
+    const [resA, resL, resR] = await Promise.allSettled([
       gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_ANTRAEGE}'&$select=id`),
       gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_LIZENZEN}'&$select=id`),
+      gGet(`/sites/${siteId}/lists?$filter=displayName eq '${LIST_REGISTER}'&$select=id`),
     ]);
 
     if (resA.status === 'fulfilled') listAntragId = resA.value.value?.[0]?.id;
@@ -211,6 +225,8 @@ async function boot() {
         if (e.status !== 403) console.warn('Lizenzliste:', e.message);
       }
     }
+
+    if (resR.status === 'fulfilled') listRegisterId = resR.value.value?.[0]?.id;
 
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
@@ -243,8 +259,9 @@ async function switchView(view) {
   $id(`view-${view}`)?.classList.add('active');
   document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
 
-  if (view === 'antraege' && !allAntraege.length) await loadAntraege();
-  if (view === 'lizenzen' && !allLizenzen.length) await loadLizenzen();
+  if (view === 'antraege' && !allAntraege.length)  await loadAntraege();
+  if (view === 'lizenzen' && !allLizenzen.length)  await loadLizenzen();
+  if (view === 'register' && !allRegister.length)  await loadRegister();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -651,6 +668,111 @@ async function deleteLizenz(itemId) {
   } catch(e) {
     alert('Fehler: ' + e.message);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KI-REGISTER
+// ═══════════════════════════════════════════════════════════════════
+async function loadRegister() {
+  if (!listRegisterId) {
+    $id('register-loading').textContent = 'Liste "' + LIST_REGISTER + '" nicht gefunden oder kein Zugriff.';
+    return;
+  }
+  $id('register-loading').classList.remove('hidden');
+  $id('register-wrap').innerHTML = '';
+
+  try {
+    const data = await gGet(`/sites/${siteId}/lists/${listRegisterId}/items?$expand=fields($select=*)&$top=999&$orderby=fields/Created desc`);
+    allRegister = data.value || [];
+    renderRegister();
+  } catch(e) {
+    $id('register-loading').textContent = 'Fehler: ' + e.message;
+  }
+}
+
+function filterRegister() { renderRegister(); }
+
+function renderRegister() {
+  const statusF = $id('reg-filter-status')?.value || '';
+  const riskF   = $id('reg-filter-risk')?.value   || '';
+
+  let items = allRegister.filter(i => {
+    const f = i.fields;
+    if (statusF && f[COL_REG.status] !== statusF) return false;
+    if (riskF   && f[COL_REG.risiko] !== riskF)  return false;
+    return true;
+  });
+
+  $id('register-loading').classList.add('hidden');
+
+  const aktiv = allRegister.filter(i => (i.fields?.[COL_REG.status] || '').toLowerCase() === 'aktiv').length;
+  const stats = `<div class="stats-row">
+    <div class="stat-card accent"><div class="stat-value">${allRegister.length}</div><div class="stat-label">Einträge gesamt</div></div>
+    <div class="stat-card green"><div class="stat-value">${aktiv}</div><div class="stat-label">Aktive Systeme</div></div>
+    <div class="stat-card orange"><div class="stat-value">${allRegister.length - aktiv}</div><div class="stat-label">Inaktiv / Archiviert</div></div>
+  </div>`;
+
+  if (!items.length) {
+    $id('register-wrap').innerHTML = stats + '<div class="empty-state">Keine Einträge gefunden.</div>';
+    return;
+  }
+
+  const rows = items.map(i => {
+    const f = i.fields;
+    return `<tr onclick="openRegisterPanel(${i.id})" style="cursor:pointer">
+      <td><strong>${esc(f.Title || '–')}</strong></td>
+      <td>${esc(f[COL_REG.verantw] || '–')}</td>
+      <td>${esc(f[COL_REG.hersteller] || f[COL_REG.anbieter] || '–')}</td>
+      <td>${riskBadge(f[COL_REG.risiko])}</td>
+      <td>${f[COL_REG.nutzungsart] ? `<span class="badge-type">${esc(f[COL_REG.nutzungsart])}</span>` : '–'}</td>
+      <td>${statusBadge(f[COL_REG.status])}</td>
+      <td>${fmtDate(f[COL_REG.freigabeDatum])}</td>
+    </tr>`;
+  }).join('');
+
+  $id('register-wrap').innerHTML = stats + `<div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>KI-System</th><th>Verantwortl. Stelle</th><th>Hersteller</th>
+          <th>Risiko</th><th>Nutzungsart</th><th>Status</th><th>Freigabe</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function openRegisterPanel(itemId) {
+  const item = allRegister.find(i => i.id == itemId);
+  if (!item) return;
+  const f = item.fields;
+
+  $id('panel-title').innerHTML = `${statusBadge(f[COL_REG.status])} <span style="margin-left:8px">${esc(f.Title || '–')}</span>`;
+
+  const row = (label, value, pre = false) =>
+    `<div class="panel-field">
+      <div class="panel-field-label">${esc(label)}</div>
+      <div class="panel-field-value${pre ? ' pre' : ''}">${value || '<span style="color:#9ca3af">–</span>'}</div>
+    </div>`;
+
+  $id('panel-body').innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">Stammdaten</div>
+      ${row('Bezeichnung',           esc(f.Title))}
+      ${row('Verantwortl. Stelle',   esc(f[COL_REG.verantw]))}
+      ${row('Hersteller / Anbieter', esc(f[COL_REG.hersteller] || f[COL_REG.anbieter]))}
+      ${row('Nutzungsart',           esc(f[COL_REG.nutzungsart]))}
+      ${row('Risikokategorie',       riskBadge(f[COL_REG.risiko]))}
+      ${row('Status',                statusBadge(f[COL_REG.status]))}
+      ${row('Freigabedatum',         fmtDate(f[COL_REG.freigabeDatum]))}
+    </div>
+    ${f[COL_REG.notizen] ? `<div class="panel-section">
+      <div class="panel-section-title">Notizen</div>
+      ${row('', esc(f[COL_REG.notizen]), true)}
+    </div>` : ''}`;
+
+  openPanel();
 }
 
 // ═══════════════════════════════════════════════════════════════════
