@@ -311,9 +311,15 @@ async function boot() {
 // ═══════════════════════════════════════════════════════════════════
 async function switchView(view) {
   currentView = view;
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  // hidden-Klasse entfernen/setzen — .hidden hat display:none !important
+  // und würde .view.active überschreiben wenn nicht explizit entfernt
+  document.querySelectorAll('.view').forEach(v => {
+    v.classList.remove('active');
+    v.classList.add('hidden');
+  });
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  $id(`view-${view}`)?.classList.add('active');
+  const activeView = $id(`view-${view}`);
+  if (activeView) { activeView.classList.remove('hidden'); activeView.classList.add('active'); }
   document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
 
   if (view === 'antraege' && !allAntraege.length)  await loadAntraege();
