@@ -117,6 +117,8 @@ let isGremium = false;
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antrag';
 let editLizenzId = null;
+// Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
+let antragCols = null;  // null = noch nicht geladen (= kein Filter)
 
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
@@ -256,6 +258,18 @@ async function boot() {
     if (lA) console.log('✓ KI_Antraege:', lA.displayName, listAntragId);
     else    console.log('⚠ KI_Antraege nicht via Listen-API gefunden → Fallback-GUID:', listAntragId);
 
+    // Tatsächliche schreibbare Spaltennamen der Antraege-Liste abrufen
+    // → verhindert 500-Fehler bei ungültigen Feldnamen
+    try {
+      const colData = await gGet(`/sites/${siteId}/lists/${listAntragId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+      antragCols = new Set(
+        (colData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
+      );
+      console.log('✓ Antraege-Spalten:', [...antragCols].sort().join(', '));
+    } catch(e) {
+      console.warn('Spaltenabruf fehlgeschlagen (kein Filter aktiv):', e.message);
+    }
+
     // Lizenzen: nur wenn gefunden
     if (lL) {
       listLizenzId = lL.id;
@@ -372,7 +386,7 @@ async function submitAntrag(e) {
   e.preventDefault();
   const btn = $id('btn-submit');
 
-  // Validation
+  // Pflichtfelder prüfen
   let valid = true;
   document.querySelectorAll('#form-antrag-fields [required]').forEach(el => {
     el.classList.remove('invalid');
@@ -383,17 +397,34 @@ async function submitAntrag(e) {
   btn.disabled = true; btn.textContent = 'Wird eingereicht …';
   $id('antrag-success').classList.add('hidden');
 
-  const fields = { [COL.status]: 'Eingereicht' };
+  // Hilfsfunktion: prüft ob Spalte in der SP-Liste wirklich existiert
+  const colOk = name => !antragCols || antragCols.has(name);
+
+  // Felder sammeln — Status wird NICHT im POST gesendet (verhindert 500)
+  // Status wird stattdessen per PATCH nach Erstellung gesetzt
+  const fields = {};
   for (const f of ANTRAG_FIELDS) {
     if (f.section) continue;
     const el = $id(`f-${f.key}`);
     if (!el) continue;
     const v = el.value.trim();
-    if (v) fields[f.key] = spValue(f.type, v);
+    if (v && colOk(f.key)) fields[f.key] = spValue(f.type, v);
+    else if (v && !colOk(f.key)) console.warn('Spalte nicht in SP gefunden, übersprungen:', f.key);
   }
 
   try {
-    await gPost(`/sites/${siteId}/lists/${listAntragId}/items`, { fields });
+    const newItem = await gPost(`/sites/${siteId}/lists/${listAntragId}/items`, { fields });
+
+    // Status automatisch auf "Eingereicht" setzen (per PATCH, nicht POST)
+    if (newItem?.id && colOk(COL.status)) {
+      try {
+        await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${newItem.id}/fields`,
+          { [COL.status]: 'Eingereicht' });
+      } catch(eStatus) {
+        console.warn('Status-PATCH fehlgeschlagen (wird ignoriert):', eStatus.message);
+      }
+    }
+
     $id('form-antrag').reset();
     const s = $id('antrag-success');
     s.textContent = '✓ Ihr Antrag wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen und Sie per E-Mail informieren.';
@@ -401,7 +432,13 @@ async function submitAntrag(e) {
     allAntraege = [];
     updateOpenBadge();
   } catch(err) {
-    alert('Fehler beim Einreichen: ' + err.message);
+    $id('antrag-success').classList.add('hidden');
+    const errMsg = document.createElement('div');
+    errMsg.className = 'boot-err';
+    errMsg.style.cssText = 'color:#dc2626;background:#fef2f2;padding:10px;border-radius:6px;margin-top:10px;font-size:.85rem';
+    errMsg.textContent = '✕ Fehler: ' + err.message;
+    $id('btn-submit').after(errMsg);
+    setTimeout(() => errMsg.remove(), 8000);
   }
 
   btn.disabled = false; btn.textContent = 'Antrag einreichen';
@@ -668,6 +705,11 @@ function openLizenzModal(itemId) {
   editLizenzId = itemId || null;
   const item = itemId ? allLizenzen.find(i => i.id == itemId) : null;
   const f = item?.fields || {};
+
+  // Neue Lizenz: Verantwortlich IT = aktuell angemeldeter User
+  if (!itemId && !f[COL.verantwIT]) {
+    f[COL.verantwIT] = account?.name || account?.username || '';
+  }
 
   $id('modal-title').textContent = itemId ? 'Lizenz bearbeiten' : 'Neue Lizenz erfassen';
 
