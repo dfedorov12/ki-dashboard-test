@@ -11,6 +11,10 @@ const LIST_ANTRAEGE  = 'KI_Antraege';
 const LIST_LIZENZEN  = 'KI_Lizenzen';
 const LIST_REGISTER  = 'KI_Register';
 
+// Bekannte GUIDs als Fallback (aus Browser-Netzwerklog ermittelt)
+const KNOWN_SITE_ID        = 'dihag.sharepoint.com,1618712f-787b-4584-ad54-2bf68c110f15,b93e94cf-030f-4296-9756-15492a5409d9';
+const KNOWN_ANTRAEGE_GUID  = '28d7d466-6239-4575-be27-4c3873634707';
+
 // KI-Register Spaltennamen
 const COL_REG = {
   status:        'Status',
@@ -181,21 +185,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 // GRAPH API
 // ═══════════════════════════════════════════════════════════════════
 async function gFetch(url, opts = {}) {
-  const token = await getToken();
-  const full  = url.startsWith('http') ? url : `https://graph.microsoft.com/v1.0${url}`;
-  const res   = await fetch(full, {
+  const token  = await getToken();
+  const full   = url.startsWith('http') ? url : `https://graph.microsoft.com/v1.0${url}`;
+  const method = (opts.method || 'GET').toUpperCase();
+  // Prefer-Header nur bei GET-Abfragen (verhindert Probleme bei POST/PATCH)
+  const preferHdr = method === 'GET'
+    ? { 'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly' }
+    : {};
+  const res = await fetch(full, {
     ...opts,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly',
+      ...preferHdr,
       ...(opts.headers || {})
     }
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     const detail  = errBody?.error?.message || errBody?.error?.code || res.statusText || res.status;
-    console.error('Graph API error', res.status, JSON.stringify(errBody));
+    console.error('Graph API error', method, res.status, JSON.stringify(errBody));
     throw Object.assign(new Error(`${res.status}: ${detail}`), { status: res.status, graphError: errBody });
   }
   return res.status === 204 ? null : res.json();
@@ -211,84 +220,86 @@ const gDel   = url        => gFetch(url, { method: 'DELETE' });
 async function boot() {
   $id('boot-sub').textContent = 'Daten werden geladen…';
   try {
-    const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
-    siteId = site.id;
-
-    // Alle Listen der Site abrufen und per internem URL-Namen (name-Feld) zuordnen
-    // Das ist zuverlässiger als displayName- oder Pfad-Lookup
-    let allLists = [];
-    let nextUrl = `/sites/${siteId}/lists?$select=id,displayName,name&$top=200`;
-    while (nextUrl) {
-      const page = await gGet(nextUrl);
-      allLists = allLists.concat(page.value || []);
-      nextUrl = page['@odata.nextLink'] || null;
+    // Site-ID: zuerst dynamisch auflösen, sonst bekannte GUID als Fallback
+    try {
+      const site = await gGet(`/sites/${SP_HOST}:${SP_SITE_PATH}`);
+      siteId = site.id;
+    } catch(e) {
+      console.warn('Site-Lookup fehlgeschlagen, nutze Fallback-ID:', e.message);
+      siteId = KNOWN_SITE_ID;
     }
 
-    const findList = internalName => allLists.find(
-      l => l.name?.toLowerCase() === internalName.toLowerCase() ||
-           l.displayName?.toLowerCase() === internalName.toLowerCase()
+    // Alle Listen der Site abrufen; matcht intern (name) UND Anzeigenamen (displayName)
+    let allLists = [];
+    try {
+      let nextUrl = `/sites/${siteId}/lists?$select=id,displayName,name&$top=200`;
+      while (nextUrl) {
+        const page = await gGet(nextUrl);
+        allLists = allLists.concat(page.value || []);
+        nextUrl = page['@odata.nextLink'] || null;
+      }
+    } catch(e) {
+      console.warn('Listen-Übersicht fehlgeschlagen:', e.message);
+    }
+
+    const findList = key => allLists.find(
+      l => l.name?.toLowerCase()        === key.toLowerCase() ||
+           l.displayName?.toLowerCase() === key.toLowerCase()
     );
 
     const lA = findList(LIST_ANTRAEGE);
     const lL = findList(LIST_LIZENZEN);
     const lR = findList(LIST_REGISTER);
 
-    if (lA) { listAntragId  = lA.id; console.log('KI_Antraege →',  lA.displayName, lA.id); }
-    else     { console.warn('Liste nicht gefunden:', LIST_ANTRAEGE,
-                 'Verfügbar:', allLists.map(l => `${l.name}(${l.displayName})`).join(', ')); }
+    // Antraege: dynamisch oder bekannte GUID als Fallback
+    listAntragId = lA?.id || KNOWN_ANTRAEGE_GUID;
+    if (lA) console.log('✓ KI_Antraege:', lA.displayName, listAntragId);
+    else    console.log('⚠ KI_Antraege nicht via Listen-API gefunden → Fallback-GUID:', listAntragId);
 
+    // Lizenzen: nur wenn gefunden
     if (lL) {
       listLizenzId = lL.id;
-      console.log('KI_Lizenzen →', lL.displayName, lL.id);
+      console.log('✓ KI_Lizenzen:', lL.displayName, listLizenzId);
       try {
         await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
         isGremium = true;
+        console.log('✓ Gremium-Zugriff bestätigt');
       } catch(e) {
-        if (e.status !== 403) console.warn('Lizenzliste Lesezugriff:', e.message);
+        if (e.status !== 403) console.warn('Lizenzen Lesezugriff:', e.message);
+        else console.log('ℹ Kein Gremium-Zugriff auf Lizenzen (403)');
       }
     } else {
-      console.warn('Liste nicht gefunden:', LIST_LIZENZEN);
+      console.warn('⚠ KI_Lizenzen nicht gefunden. Verfügbare Listen:',
+        allLists.map(l => `${l.name}/${l.displayName}`).join(' | '));
     }
 
-    if (lR) { listRegisterId = lR.id; console.log('KI_Register →',  lR.displayName, lR.id); }
-    else     { console.warn('Liste nicht gefunden:', LIST_REGISTER); }
+    // Register
+    if (lR) {
+      listRegisterId = lR.id;
+      console.log('✓ KI_Register:', lR.displayName, listRegisterId);
+    } else {
+      console.warn('⚠ KI_Register nicht gefunden');
+    }
 
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
 
-    const name = account?.name || account?.username || '';
-    $id('user-name').textContent = name;
+    const uName = account?.name || account?.username || '';
+    $id('user-name').textContent = uName;
 
-    // Diagnose-Banner: zeigt welche Listen gefunden wurden
-    const missing = [
-      !listAntragId  && LIST_ANTRAEGE,
-      !listLizenzId  && LIST_LIZENZEN,
-      !listRegisterId && LIST_REGISTER,
-    ].filter(Boolean);
-    if (missing.length) {
-      const banner = document.createElement('div');
-      banner.style.cssText = 'background:#fef3c7;border:1px solid #f59e0b;padding:8px 16px;font-size:13px;color:#92400e';
-      banner.textContent = '⚠️ Folgende SharePoint-Listen konnten nicht gefunden werden: ' + missing.join(', ')
-        + '. Bitte prüfen Sie die internen Listennamen. Verfügbare Listen: '
-        + allLists.filter(l => l.name?.startsWith('KI')).map(l => l.name).join(', ') || '(keine KI-Listen)';
-      document.querySelector('.nav-tabs').after(banner);
-    }
-
+    // Tabs: Lizenzen nur für Gremium, Register nur wenn Liste bekannt
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
     } else {
-      // Nicht-Gremium: Lizenzen ausblenden, Register bleibt sichtbar (Read-only)
       document.querySelector('[data-view="lizenzen"]').style.display = 'none';
     }
-
-    // Register-Tab ausblenden wenn Liste nicht erreichbar
     if (!listRegisterId) {
       document.querySelector('[data-view="register"]').style.display = 'none';
     }
 
     renderAntragForm();
   } catch(e) {
-    $id('boot-err').textContent       = 'Fehler: ' + e.message;
+    $id('boot-err').textContent       = 'Fehler beim Start: ' + e.message;
     $id('boot-spinner').style.display = 'none';
     $id('boot-btn').style.display     = 'block';
     $id('boot-btn').textContent       = 'Erneut versuchen';
@@ -402,12 +413,18 @@ async function loadAntraege() {
   $id('antraege-list').innerHTML = '';
 
   try {
-    const data = await gGet(`/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999&$orderby=fields/Created desc`);
-    allAntraege = data.value || [];
+    const data = await gGet(`/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`);
+    // Client-seitig sortieren — vermeidet 400 bei nicht-indizierten Feldern
+    allAntraege = (data.value || []).sort((a, b) => {
+      const da = new Date(a.fields?.Created || a.createdDateTime || 0);
+      const db = new Date(b.fields?.Created || b.createdDateTime || 0);
+      return db - da;
+    });
     renderAntraege();
     updateOpenBadge();
   } catch(e) {
-    $id('antraege-loading').textContent = 'Fehler: ' + e.message;
+    $id('antraege-loading').textContent = 'Fehler beim Laden: ' + e.message;
+    console.error('loadAntraege:', e);
   }
 }
 
@@ -728,7 +745,7 @@ async function loadRegister() {
   $id('register-wrap').innerHTML = '';
 
   try {
-    const data = await gGet(`/sites/${siteId}/lists/${listRegisterId}/items?$expand=fields($select=*)&$top=999&$orderby=fields/Created desc`);
+    const data = await gGet(`/sites/${siteId}/lists/${listRegisterId}/items?$expand=fields($select=*)&$top=999`);
     allRegister = data.value || [];
     renderRegister();
   } catch(e) {
