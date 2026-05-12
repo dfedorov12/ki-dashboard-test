@@ -395,34 +395,58 @@ async function submitAntrag(e) {
   if (!valid) return;
 
   btn.disabled = true; btn.textContent = 'Wird eingereicht …';
-  $id('antrag-success').classList.add('hidden');
+  removeAntragError();
 
-  // Hilfsfunktion: prüft ob Spalte in der SP-Liste wirklich existiert
+  // Spalten-Check-Funktion
   const colOk = name => !antragCols || antragCols.has(name);
 
-  // Felder sammeln — Status wird NICHT im POST gesendet (verhindert 500)
-  // Status wird stattdessen per PATCH nach Erstellung gesetzt
-  const fields = {};
+  // Alle Formularwerte sammeln (ohne Status)
+  const detailFields = {};
   for (const f of ANTRAG_FIELDS) {
     if (f.section) continue;
     const el = $id(`f-${f.key}`);
-    if (!el) continue;
+    if (!el || f.key === 'Title') continue;
     const v = el.value.trim();
-    if (v && colOk(f.key)) fields[f.key] = spValue(f.type, v);
-    else if (v && !colOk(f.key)) console.warn('Spalte nicht in SP gefunden, übersprungen:', f.key);
+    if (!v) continue;
+    if (colOk(f.key)) detailFields[f.key] = spValue(f.type, v);
+    else console.warn('Spalte nicht in SP-Liste gefunden, übersprungen:', f.key);
   }
 
-  try {
-    const newItem = await gPost(`/sites/${siteId}/lists/${listAntragId}/items`, { fields });
+  const titleEl = $id(`f-Title`);
+  const titleVal = titleEl?.value.trim() || '–';
 
-    // Status automatisch auf "Eingereicht" setzen (per PATCH, nicht POST)
-    if (newItem?.id && colOk(COL.status)) {
-      try {
-        await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${newItem.id}/fields`,
-          { [COL.status]: 'Eingereicht' });
-      } catch(eStatus) {
-        console.warn('Status-PATCH fehlgeschlagen (wird ignoriert):', eStatus.message);
+  // Debug-Ausgabe
+  console.log('antragCols:', antragCols ? [...antragCols].sort().join(', ') : 'null (kein Filter)');
+  console.log('STEP 1 – POST fields:', JSON.stringify({ Title: titleVal }));
+  console.log('STEP 2 – PATCH fields:', JSON.stringify(detailFields));
+
+  try {
+    // ── Schritt 1: Item mit nur Title erstellen ──────────────────────
+    // Minimal-POST vermeidet 500 durch ungültige Feldnamen
+    const newItem = await gPost(`/sites/${siteId}/lists/${listAntragId}/items`,
+      { fields: { Title: titleVal } });
+
+    if (!newItem?.id) throw new Error('Kein Item-ID in der Antwort');
+
+    // ── Schritt 2: Details + Status per PATCH setzen ─────────────────
+    const patchPayload = { ...detailFields };
+    if (colOk(COL.status)) patchPayload[COL.status] = 'Eingereicht';
+
+    try {
+      await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${newItem.id}/fields`,
+        patchPayload);
+    } catch(ePatch) {
+      // PATCH fehlgeschlagen — Item existiert, aber Details fehlen
+      console.warn('Detail-PATCH fehlgeschlagen:', ePatch.message,
+        '\nPayload:', JSON.stringify(patchPayload));
+      // Zumindest Status versuchen
+      if (colOk(COL.status)) {
+        try {
+          await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${newItem.id}/fields`,
+            { [COL.status]: 'Eingereicht' });
+        } catch(e2) { console.warn('Status-only-PATCH auch fehlgeschlagen:', e2.message); }
       }
+      showAntragError('Antrag erstellt, aber Details konnten nicht gespeichert werden: ' + ePatch.message);
     }
 
     $id('form-antrag').reset();
@@ -431,17 +455,26 @@ async function submitAntrag(e) {
     s.classList.remove('hidden');
     allAntraege = [];
     updateOpenBadge();
+
   } catch(err) {
-    $id('antrag-success').classList.add('hidden');
-    const errMsg = document.createElement('div');
-    errMsg.className = 'boot-err';
-    errMsg.style.cssText = 'color:#dc2626;background:#fef2f2;padding:10px;border-radius:6px;margin-top:10px;font-size:.85rem';
-    errMsg.textContent = '✕ Fehler: ' + err.message;
-    $id('btn-submit').after(errMsg);
-    setTimeout(() => errMsg.remove(), 8000);
+    console.error('Antrag-Submit fehlgeschlagen:', err.message);
+    showAntragError('Fehler beim Erstellen: ' + err.message);
   }
 
   btn.disabled = false; btn.textContent = 'Antrag einreichen';
+}
+
+function showAntragError(msg) {
+  removeAntragError();
+  const el = document.createElement('div');
+  el.id = 'antrag-err';
+  el.style.cssText = 'color:#dc2626;background:#fef2f2;border:1px solid #fca5a5;padding:10px 14px;border-radius:6px;margin-top:12px;font-size:.85rem';
+  el.textContent = '✕ ' + msg;
+  $id('btn-submit').after(el);
+}
+function removeAntragError() {
+  $id('antrag-err')?.remove();
+  $id('antrag-success')?.classList.add('hidden');
 }
 
 // ═══════════════════════════════════════════════════════════════════
