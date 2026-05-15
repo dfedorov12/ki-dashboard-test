@@ -806,11 +806,9 @@ async function saveGremiumDecision(itemId, forceStatus) {
               const draftNote = '⚠ Automatisch erstellt – bitte Lizenzdetails ergänzen';
               const patchUrl  = `/sites/${siteId}/lists/${listLizenzId}/items/${newLiz.id}/fields`;
 
-              // KI-System setzen (feldweise, colOk-geprüft)
-              if (!lizenzCols || lizenzCols.has(COL.kiSystem)) {
-                try { await gPatch(patchUrl, { [COL.kiSystem]: systemName }); }
-                catch(e) { console.warn('Auto-Lizenz KI-System PATCH:', e.message); }
-              }
+              // COL.kiSystem ist ein Lookup auf KI_Register → kein Text-Write möglich.
+              // Der Lookup wird gesetzt, sobald der Register-Eintrag bei Lizenzierung erstellt wird.
+              // Title reicht für die Anzeige in der Zwischenzeit.
 
               // Notizen setzen – mehrere Kandidaten durchprobieren
               let notesSaved = false;
@@ -1321,8 +1319,9 @@ async function saveLizenz() {
     if (converted === null) continue;
     detailFields[f.key] = converted;
   }
-  // KI-System in Detail-Felder (colOk-geprüft)
-  if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
+  // COL.kiSystem ('System_x0028_LookupaufKI_Registe') ist ein Lookup auf KI_Register
+  // → kann nicht als Text geschrieben werden; wird von createRegisterEntries via LookupId gesetzt
+  // Zur Anzeige reicht Title (= Systemname), das wird separat gesetzt
 
   // Verantwortlich IT: wird immer auf den aktuell eingeloggten User gesetzt
   if (colOk(COL.verantwIT)) detailFields[COL.verantwIT] = account?.name || account?.username || '';
@@ -1401,11 +1400,12 @@ async function saveLizenz() {
     allLizenzen = [];
     await loadLizenzen();
 
-    // Wenn ein Entwurf vollständig ausgefüllt wurde → KI-Register-Einträge anlegen
-    if (wasDraft && listRegisterId && lizenzUsers.length > 0) {
-      await createRegisterEntries(kiSysVal, lizenzUsers);
+    // Wenn ein Entwurf vollständig ausgefüllt wurde → KI-Register-Eintrag anlegen
+    if (wasDraft && listRegisterId) {
+      const finalId = editLizenzId;  // editLizenzId noch gesetzt vor closModal
+      await createRegisterEntries(kiSysVal, lizenzUsers, finalId);
       allRegister = [];
-      console.log('✓ KI-Register-Einträge nach Lizenzierung erstellt');
+      console.log('✓ KI-Register nach Lizenzierung aktualisiert');
     }
   } catch(e) {
     showLizenzError('Speichern fehlgeschlagen: ' + e.message);
@@ -1413,55 +1413,85 @@ async function saveLizenz() {
   }
 }
 
-// Legt für jeden Lizenznehmer einen Eintrag im KI-Register an
-async function createRegisterEntries(kiSystem, users) {
+// Legt EINEN KI-Register-Eintrag pro System an (nicht pro Person).
+// Die beteiligten Kollegen landen als Text in KeyUser.
+// Nach der Erstellung wird das Lizenz-System-Lookup-Feld gesetzt.
+async function createRegisterEntries(kiSystem, users, lizenzItemId) {
   if (!listRegisterId) return;
   const regColOk = k => k && (!registerCols || registerCols.has(k));
 
-  // Verwandte Antrag-Daten (Risiko, Nutzungsart, Hersteller) suchen
-  const antrag   = allAntraege.find(i =>
+  // Duplikat-Prüfung: Register-Eintrag für dieses System schon vorhanden?
+  const existing = allRegister.find(r =>
+    (r.fields?.Title || '').toLowerCase() === kiSystem.toLowerCase()
+  );
+  if (existing) {
+    console.log('Register-Eintrag bereits vorhanden:', kiSystem);
+    // Trotzdem Lizenz-Lookup aktualisieren falls noch nicht gesetzt
+    if (lizenzItemId) await updateLizenzSystemLookup(lizenzItemId, parseInt(existing.id));
+    return;
+  }
+
+  // Verwandte Antrag-Daten (Hersteller, Beschreibung, Anwendungsbereiche, KeyUser, …)
+  const antrag = allAntraege.find(i =>
     (i.fields?.Title || '').toLowerCase() === kiSystem.toLowerCase()
   );
   const af = antrag?.fields || {};
 
-  for (const user of users) {
-    const userName = user.name || user.email || '?';
-    try {
-      // Duplikat-Prüfung in lokalem Cache
-      const exists = allRegister.some(r => {
-        const rName = (r.fields?.Title || '').toLowerCase();
-        const rSys  = (COL_REG.kiSystem ? (r.fields?.[COL_REG.kiSystem] || '') : r.fields?.Title || '').toLowerCase();
-        return rName === userName.toLowerCase() && rSys === kiSystem.toLowerCase();
-      });
-      if (exists) { console.log('Register-Eintrag bereits vorhanden:', userName); continue; }
+  try {
+    // Schritt 1: Register-Item mit Title anlegen
+    const regItem = await gPost(`/sites/${siteId}/lists/${listRegisterId}/items`,
+      { fields: { Title: kiSystem } });
+    if (!regItem?.id) return;
 
-      // POST: nur Title zuerst (sicherer)
-      const regItem = await gPost(`/sites/${siteId}/lists/${listRegisterId}/items`,
-        { fields: { Title: userName } });
-      if (!regItem?.id) continue;
+    // Schritt 2: Felder befüllen (nur bekannte, schreibbare Spalten)
+    const pf = {};
 
-      // PATCH: alle bekannten Felder
-      const pf = {};
-      if (COL_REG.kiSystem && regColOk(COL_REG.kiSystem)) pf[COL_REG.kiSystem] = kiSystem;
-      if (regColOk(COL_REG.status))       pf[COL_REG.status]       = 'Aktiv';
-      if (af[COL.risiko]       && regColOk(COL_REG.risiko))       pf[COL_REG.risiko]       = af[COL.risiko];
-      if (af[COL.nutzungsart]  && regColOk(COL_REG.nutzungsart))  pf[COL_REG.nutzungsart]  = af[COL.nutzungsart];
-      if (af[COL.hersteller]   && regColOk(COL_REG.hersteller))   pf[COL_REG.hersteller]   = af[COL.hersteller];
-      if (regColOk(COL_REG.freigabeDatum)) pf[COL_REG.freigabeDatum] = new Date().toISOString().slice(0, 10);
-      // Nutzer-Personenfeld (falls im Register vorhanden)
-      if (COL_REG.nutzer && regColOk(COL_REG.nutzer) && user.spId) {
-        pf[COL_REG.nutzer + 'LookupId@odata.type'] = 'Collection(Edm.Int32)';
-        pf[COL_REG.nutzer + 'LookupId']             = [parseInt(user.spId)];
-      }
-
-      if (Object.keys(pf).length) {
-        await gPatch(`/sites/${siteId}/lists/${listRegisterId}/items/${regItem.id}/fields`, pf)
-          .catch(e => console.warn('Register-PATCH:', userName, e.message));
-      }
-      console.log('✓ Register-Eintrag:', userName, '/', kiSystem);
-    } catch(e) {
-      console.warn('Register-Eintrag fehlgeschlagen:', userName, e.message);
+    // Lookup auf den Antrag (AntragID-Feld)
+    const antragLookupCol = 'AntragID_x0028_LookupaufKI_Antra';
+    if (antrag?.id && regColOk(antragLookupCol)) {
+      pf[antragLookupCol + 'LookupId'] = parseInt(antrag.id);
     }
+
+    // Daten aus dem Antrag
+    if (af[COL.hersteller]       && regColOk('Hersteller'))         pf['Hersteller']         = af[COL.hersteller];
+    if (af[COL.komponenten]      && regColOk('Beschreibung'))        pf['Beschreibung']       = af[COL.komponenten];
+    if (af[COL.zweckUnternehmen] && regColOk('Anwendungsbereiche'))  pf['Anwendungsbereiche'] = af[COL.zweckUnternehmen];
+    if (af[COL.keyUser]          && regColOk('Schulungszielgruppe')) pf['Schulungszielgruppe']= af[COL.keyUser];
+    if (regColOk('GueltigAb'))   pf['GueltigAb'] = new Date().toISOString().slice(0, 10);
+
+    // Kollegen (KI-User) als Text in KeyUser
+    if (users.length && regColOk('KeyUser')) {
+      pf['KeyUser'] = users.map(u => u.name || u.email).filter(Boolean).join(', ');
+    }
+
+    if (Object.keys(pf).length) {
+      await gPatch(`/sites/${siteId}/lists/${listRegisterId}/items/${regItem.id}/fields`, pf)
+        .catch(e => console.warn('Register-PATCH:', e.message));
+    }
+
+    // Schritt 3: Lizenz-System-Lookup auf den neuen Register-Eintrag setzen
+    if (lizenzItemId) await updateLizenzSystemLookup(lizenzItemId, parseInt(regItem.id));
+
+    console.log('✓ Register-Eintrag erstellt:', kiSystem, '(ID:', regItem.id, ')');
+  } catch(e) {
+    console.warn('Register-Eintrag fehlgeschlagen:', kiSystem, e.message);
+  }
+}
+
+// Setzt das System-Lookup-Feld in der Lizenz auf einen KI_Register-Eintrag
+async function updateLizenzSystemLookup(lizenzItemId, registerId) {
+  if (!lizenzItemId || !registerId || !listLizenzId) return;
+  // COL.kiSystem = 'System_x0028_LookupaufKI_Registe' (Lookup-Feld)
+  // Schreiben: LookupId-Suffix + integer (kein Collection, da Single-Value-Lookup)
+  const lookupKey = COL.kiSystem + 'LookupId';
+  try {
+    await gPatch(
+      `/sites/${siteId}/lists/${listLizenzId}/items/${lizenzItemId}/fields`,
+      { [lookupKey]: registerId }
+    );
+    console.log('✓ Lizenz System-Lookup gesetzt:', registerId);
+  } catch(e) {
+    console.warn('Lizenz System-Lookup PATCH fehlgeschlagen:', e.message);
   }
 }
 
