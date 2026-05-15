@@ -118,7 +118,8 @@ let currentView = 'antrag';
 let editLizenzId = null;
 let lizenzUsers = []; // current modal's user list
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
-let antragCols = null;  // null = noch nicht geladen (= kein Filter)
+let antragCols  = null;  // null = noch nicht geladen (= kein Filter)
+let lizenzCols  = null;  // analog für KI_Lizenzen
 
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
@@ -279,11 +280,15 @@ async function boot() {
         isGremium = true;
         console.log('✓ Gremium-Zugriff bestätigt');
 
-        // Echte interne Spaltennamen der Lizenzen-Liste ermitteln
+        // Echte interne Spaltennamen + gültige Schreibspalten der Lizenzen-Liste ermitteln
         // (SharePoint-intern kann 'System' z.B. 'System0' heißen)
         try {
-          const lizCols = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName&$top=200`);
-          for (const col of (lizCols.value || [])) {
+          const lizColData = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+          lizenzCols = new Set(
+            (lizColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
+          );
+          console.log('✓ Lizenzen-Spalten:', [...lizenzCols].sort().join(', '));
+          for (const col of (lizColData.value || [])) {
             if (col.displayName === 'System') {
               const oldKey = COL.kiSystem;
               COL.kiSystem = col.name;
@@ -959,24 +964,42 @@ async function saveLizenz() {
     }
   }
 
-  const fields = { Title: kiSysVal }; // Title = KI-System (SP requires Title)
+  // Spalten-Check: ungültige Felder überspringen (wie bei submitAntrag)
+  const colOk = name => !lizenzCols || lizenzCols.has(name);
 
+  // Detail-Felder sammeln (ohne Title / kiSystem – werden separat gesetzt)
+  const detailFields = {};
   for (const f of LIZENZ_FIELDS) {
     const el = $id(`lf-${f.key}`);
-    if (!el) continue;
+    if (!el || f.key === COL.kiSystem) continue;
     const v = el.value.trim();
-    if (v !== '') fields[f.key] = spValue(f.type === 'combo' ? 'text' : f.type, v);
+    if (v === '') continue;
+    if (colOk(f.key)) detailFields[f.key] = spValue(f.type === 'combo' ? 'text' : f.type, v);
+    else console.warn('Lizenz-Spalte nicht in SP gefunden, übersprungen:', f.key);
   }
+  // Users + belegt
+  if (colOk(COL.nutzer))      detailFields[COL.nutzer]      = serializeLizenzUsers(lizenzUsers);
+  if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
+  // KI-System auch in Detail-Felder, falls Spaltenname aufgelöst wurde
+  if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
 
-  // Users → serialized string + auto-calculate belegt
-  fields[COL.nutzer]      = serializeLizenzUsers(lizenzUsers);
-  fields[COL.lizenzBelegt] = lizenzUsers.length;
+  console.log('saveLizenz – Title:', kiSysVal, '| detail fields:', JSON.stringify(detailFields));
 
   try {
     if (editLizenzId) {
-      await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${editLizenzId}/fields`, fields);
+      // PATCH: Title + alle Details in einem Aufruf
+      await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${editLizenzId}/fields`,
+        { Title: kiSysVal, ...detailFields });
     } else {
-      await gPost(`/sites/${siteId}/lists/${listLizenzId}/items`, { fields });
+      // Schritt 1: Item mit nur Title anlegen (vermeidet 500 bei unbekannten Feldern)
+      const newItem = await gPost(`/sites/${siteId}/lists/${listLizenzId}/items`,
+        { fields: { Title: kiSysVal } });
+      if (!newItem?.id) throw new Error('Kein Item-ID in der Antwort');
+      // Schritt 2: Details per PATCH setzen
+      if (Object.keys(detailFields).length) {
+        await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${newItem.id}/fields`,
+          detailFields);
+      }
     }
     closeModal();
     allLizenzen = [];
