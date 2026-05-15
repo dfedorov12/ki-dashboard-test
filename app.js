@@ -159,6 +159,41 @@ async function doLogin() {
 
 function logout() { msalInstance.logoutPopup({ postLogoutRedirectUri: location.href }); }
 
+// Optionaler SharePoint-REST-Token (nur wenn App-Registration SP-Berechtigung hat)
+async function tryGetSpToken() {
+  try {
+    return (await msalInstance.acquireTokenSilent({
+      scopes: [`https://${SP_HOST}/Sites.ReadWrite.All`],
+      account
+    })).accessToken;
+  } catch(e) { return null; }
+}
+
+// SP-User via ensureUser (SharePoint REST) auflösen → LookupId
+async function ensureSpUserViaRest(email) {
+  const token = await tryGetSpToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(
+      `https://${SP_HOST}${SP_SITE_PATH}/_api/web/ensureUser`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ logOnName: `i:0#.f|membership|${email}` })
+      }
+    );
+    if (!res.ok) return null;
+    const d = await res.json();
+    const id = d.Id ?? d.id ?? null;
+    if (id) { seedSpUser(id, email, '', d.Title || ''); return id; }
+  } catch(e) { console.warn('ensureUser fehlgeschlagen:', email, e.message); }
+  return null;
+}
+
 async function getToken() {
   try { return (await msalInstance.acquireTokenSilent({ scopes: SCOPES, account })).accessToken; }
   catch(e) {
@@ -690,6 +725,16 @@ function openAntragPanel(itemId) {
       ${row('Anwendungsbereich intern',   esc(f[COL.zweckUnternehmen]), true)}
     </div>`;
 
+  // Für alle User: Status-Bereich (read-only für normale User)
+  const statusSection = !isGremium ? `
+    <div class="panel-section">
+      <div class="panel-section-title">Status</div>
+      ${row('Aktueller Status', statusBadge(f[COL.status]))}
+      ${f[COL.gremiumKommentar] ? row('Gremium-Kommentar', esc(f[COL.gremiumKommentar]), true) : ''}
+      ${f[COL.auflagen]         ? row('Auflagen',           esc(f[COL.auflagen]), true) : ''}
+      ${f[COL.freigabeDatum]    ? row('Freigabedatum',      fmtDate(f[COL.freigabeDatum])) : ''}
+    </div>` : '';
+
   const gremiumSection = isGremium ? `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
@@ -713,15 +758,9 @@ function openAntragPanel(itemId) {
         <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
         <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id})">💾 Speichern</button>
       </div>
-    </div>` : (f[COL.gremiumKommentar] ? `
-    <div class="panel-section">
-      <div class="panel-section-title">Gremium-Rückmeldung</div>
-      ${row('Kommentar', esc(f[COL.gremiumKommentar]), true)}
-      ${f[COL.auflagen] ? row('Auflagen', esc(f[COL.auflagen]), true) : ''}
-      ${f[COL.freigabeDatum] ? row('Freigabedatum', fmtDate(f[COL.freigabeDatum])) : ''}
-    </div>` : '');
+    </div>` : '';
 
-  $id('panel-body').innerHTML = rows1 + gremiumSection;
+  $id('panel-body').innerHTML = rows1 + statusSection + gremiumSection;
   openPanel();
 }
 
@@ -739,6 +778,40 @@ async function saveGremiumDecision(itemId, forceStatus) {
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
     if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
+
+    // Bei Genehmigung: automatisch Draft-Lizenz erstellen (falls noch keine existiert)
+    if (status === 'Genehmigt' && listLizenzId) {
+      const antrag = allAntraege.find(i => i.id == itemId);
+      const systemName = antrag?.fields?.Title;
+      if (systemName) {
+        try {
+          // Prüfen ob Lizenz schon vorhanden (lokal + ggf. remote)
+          let lizenzen = allLizenzen;
+          if (!lizenzen.length) {
+            const d = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=Title,${COL.kiSystem})&$top=999`);
+            lizenzen = d.value || [];
+          }
+          const exists = lizenzen.some(l =>
+            (l.fields?.[COL.kiSystem] || l.fields?.Title || '').toLowerCase() === systemName.toLowerCase()
+          );
+          if (!exists) {
+            const newLiz = await gPost(`/sites/${siteId}/lists/${listLizenzId}/items`,
+              { fields: { Title: systemName } });
+            if (newLiz?.id) {
+              const patch = { [COL.notizen]: '⚠ Automatisch erstellt – bitte Lizenzdetails ergänzen' };
+              if (!lizenzCols || lizenzCols.has(COL.kiSystem)) patch[COL.kiSystem] = systemName;
+              await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${newLiz.id}/fields`, patch)
+                .catch(e => console.warn('Auto-Lizenz Detail-PATCH:', e.message));
+            }
+            allLizenzen = []; // Lizenz-Tab beim nächsten Öffnen neu laden
+            console.log('✓ Draft-Lizenz automatisch erstellt:', systemName);
+          }
+        } catch(eLiz) {
+          console.warn('Auto-Lizenz Erstellung fehlgeschlagen:', eLiz.message);
+        }
+      }
+    }
+
     closePanel();
     renderAntraege();
     updateOpenBadge();
@@ -807,8 +880,11 @@ function renderLizenzen() {
       <span style="font-size:11px;color:#6b7280">${belegt}/${gesamt}</span>
     </div>` : (belegt ? `<span style="font-size:12px;color:#6b7280">${belegt} User</span>` : '–');
 
-    return `<tr onclick="openLizenzModal(${i.id})">
-      <td><strong>${esc(f[COL.kiSystem] || f.Title || '–')}</strong></td>
+    const isDraft = (f[COL.notizen] || '').startsWith('⚠ Automatisch erstellt');
+    const rowStyle = isDraft ? ' style="opacity:.55"' : '';
+    const draftBadge = isDraft ? ' <span style="font-size:10px;color:#9ca3af;font-weight:400">(Entwurf)</span>' : '';
+    return `<tr onclick="openLizenzModal(${i.id})"${rowStyle}>
+      <td><strong>${esc(f[COL.kiSystem] || f.Title || '–')}</strong>${draftBadge}</td>
       <td>${f[COL.lizenztyp] ? `<span class="badge-type">${esc(f[COL.lizenztyp])}</span>` : '–'}</td>
       <td>${esc(f[COL.anbieter] || '–')}</td>
       <td>${f[COL.kosten] ? fmtEuro(parseFloat(f[COL.kosten])) : '–'}</td>
@@ -889,7 +965,7 @@ async function resolveSpUserId(email, name) {
     const byName = spUserMap['__name__' + name.toLowerCase().trim()];
     if (byName) return byName;
   }
-  // Stufe 2: On-Demand-Query gegen UserInfo-Liste
+  // Stufe 2: On-Demand-Query gegen UserInfo-Liste (falls vorhanden)
   if (listUserInfoId && email) {
     try {
       const data = await gGet(
@@ -907,9 +983,12 @@ async function resolveSpUserId(email, name) {
       console.warn('On-Demand SP-Lookup fehlgeschlagen:', email, e.message);
     }
   }
-  console.warn('Kein SP-LookupId für:', name || email,
-    '| Map:', Object.keys(spUserMap).length,
-    '| Email:', email || '(leer)');
+  // Stufe 3: SharePoint REST ensureUser (braucht SP-Scope in App-Registration)
+  if (email) {
+    const id = await ensureSpUserViaRest(email);
+    if (id) return id;
+  }
+  console.warn('Kein SP-LookupId für:', name || email, '| Map-Größe:', Object.keys(spUserMap).length);
   return null;
 }
 
