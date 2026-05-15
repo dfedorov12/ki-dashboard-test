@@ -825,8 +825,10 @@ function showPeopleDrop(people) {
       ? `${esc(p.displayName)} <span style="color:#9ca3af;font-size:11px">${esc(mail)}</span>`
       : esc(p.displayName);
     const val   = mail || p.displayName;
+    // JSON.stringify liefert "...", dessen " im HTML-Attribut escaped werden müssen
+    const safeVal = JSON.stringify(val).replace(/"/g, '&quot;');
     return `<div class="people-item"
-      onmousedown="selectPerson(${JSON.stringify(val)})"
+      onmousedown="selectPerson(${safeVal})"
       onmouseover="this.classList.add('people-item-hover')"
       onmouseout="this.classList.remove('people-item-hover')"
     >👤 ${label}</div>`;
@@ -898,8 +900,11 @@ function openLizenzModal(itemId) {
       html += `<input id="lf-${field.key}" type="text" list="${dlId}" class="form-control" value="${esc(v)}" placeholder="Auswählen oder eingeben…">
         <datalist id="${dlId}">${field.choices.map(c => `<option value="${esc(c)}">`).join('')}</datalist>`;
     } else {
+      // KI-System beim Bearbeiten readonly (eindeutiger Schlüssel, darf nicht geändert werden)
+      const isLocked = itemId && field.key === COL.kiSystem;
       html += `<input id="lf-${field.key}" type="${field.type}" class="form-control" value="${esc(v)}"
-        ${field.key === COL.lizenzGesamt ? ' oninput="renderLizenzUserEditor()"' : ''}/>`;
+        ${field.key === COL.lizenzGesamt ? ' oninput="renderLizenzUserEditor()"' : ''}
+        ${isLocked ? ' readonly style="background:#f3f4f6;cursor:not-allowed" title="KI-System kann nach dem Anlegen nicht mehr geändert werden"' : ''}/>`;
     }
     html += '</div>';
 
@@ -919,10 +924,40 @@ function openLizenzModal(itemId) {
   $id('modal-overlay').classList.remove('hidden');
 }
 
+function showLizenzError(msg) {
+  let el = $id('lizenz-save-err');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'lizenz-save-err';
+    el.style.cssText = 'color:#dc2626;background:#fef2f2;border:1px solid #fca5a5;padding:9px 13px;border-radius:6px;margin:0 0 10px;font-size:.83rem';
+    $id('modal-body')?.querySelector('.modal-footer')?.before(el);
+  }
+  el.textContent = '✕ ' + msg;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function hideLizenzError() { $id('lizenz-save-err')?.remove(); }
+
 async function saveLizenz() {
+  hideLizenzError();
   const kiSysEl  = $id(`lf-${COL.kiSystem}`);
   const kiSysVal = kiSysEl?.value.trim();
-  if (!kiSysVal) { alert('Bitte KI-System eingeben.'); kiSysEl?.focus(); return; }
+  if (!kiSysVal) {
+    showLizenzError('Bitte KI-System eingeben.');
+    kiSysEl?.focus();
+    return;
+  }
+
+  // Eindeutigkeit prüfen – darf nur einmal existieren
+  if (!editLizenzId) {
+    const dup = allLizenzen.find(i =>
+      (i.fields?.[COL.kiSystem] || i.fields?.Title || '').toLowerCase() === kiSysVal.toLowerCase()
+    );
+    if (dup) {
+      showLizenzError(`Ein KI-System mit dem Namen „${kiSysVal}" existiert bereits.`);
+      kiSysEl?.focus();
+      return;
+    }
+  }
 
   const fields = { Title: kiSysVal }; // Title = KI-System (SP requires Title)
 
@@ -947,7 +982,9 @@ async function saveLizenz() {
     allLizenzen = [];
     await loadLizenzen();
   } catch(e) {
-    alert('Fehler: ' + e.message);
+    // Kein alert – Modal bleibt offen, Fehlermeldung inline, Formulardaten bleiben erhalten
+    showLizenzError('Speichern fehlgeschlagen: ' + e.message);
+    console.error('saveLizenz:', e);
   }
 }
 
