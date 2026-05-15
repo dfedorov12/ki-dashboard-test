@@ -164,16 +164,23 @@ async function doLogin() {
 function logout() { msalInstance.logoutPopup({ postLogoutRedirectUri: location.href }); }
 
 // Optionaler SharePoint-REST-Token – versucht mehrere Scopes (wie im Ticketsystem)
+// _spTokenAvailable: null=unbekannt, true=funktioniert, false=nicht verfügbar (kein Retry)
+let _spTokenAvailable = null;
 async function tryGetSpToken() {
+  if (_spTokenAvailable === false) return null;   // bereits bekannt: SP-Scope nicht registriert
   for (const scope of [
     `https://${SP_HOST}/AllSites.FullControl`,
     `https://${SP_HOST}/Sites.ReadWrite.All`,
     `https://${SP_HOST}/AllSites.Write`,
   ]) {
     try {
-      return (await msalInstance.acquireTokenSilent({ scopes: [scope], account })).accessToken;
+      const tok = (await msalInstance.acquireTokenSilent({ scopes: [scope], account })).accessToken;
+      _spTokenAvailable = true;
+      return tok;
     } catch(e) { /* nächsten Scope versuchen */ }
   }
+  // Alle Scopes fehlgeschlagen → SP-REST nicht verfügbar, kein weiterer Versuch nötig
+  _spTokenAvailable = false;
   return null;
 }
 
