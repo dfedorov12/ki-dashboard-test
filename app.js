@@ -43,7 +43,7 @@ const COL = {
   auflagen:         'Auflagen',
   freigabeDatum:    'FreigabeDatum',
   // Lizenzen
-  kiSystem:         'KISystem',
+  kiSystem:         'System',
   lizenztyp:        'Lizenztyp',
   anbieter:         'Anbieter',
   kosten:           'Kosten',
@@ -788,6 +788,19 @@ function openLizenzModal(itemId) {
 
   $id('modal-title').textContent = itemId ? 'Lizenz bearbeiten' : 'Neue Lizenz erfassen';
 
+  const USER_SECTION = `
+    <div style="grid-column:1/-1;margin-top:4px;border-top:1px solid #e5e9ef;padding-top:14px">
+      <div style="font-weight:600;font-size:.875rem;color:#374151;margin-bottom:10px">👥 KI-User (Lizenznehmer)</div>
+      <div id="lz-user-list"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+        <input id="lz-user-input" type="text" class="form-control"
+          placeholder="Name oder E-Mail eingeben…" style="flex:1"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();addLizenzUser();}">
+        <button class="btn btn-primary btn-sm" onclick="addLizenzUser()">+ Hinzufügen</button>
+      </div>
+      <div id="lz-user-count" style="font-size:12px;color:#6b7280;margin-top:6px"></div>
+    </div>`;
+
   let html = '<div class="form-row" style="grid-template-columns:1fr 1fr">';
   for (const field of LIZENZ_FIELDS) {
     const v   = f[field.key] ?? '';
@@ -810,22 +823,11 @@ function openLizenzModal(itemId) {
         ${field.key === COL.lizenzGesamt ? ' oninput="renderLizenzUserEditor()"' : ''}/>`;
     }
     html += '</div>';
+
+    // KI-User direkt nach "Lizenzen gesamt" einblenden
+    if (field.key === COL.lizenzGesamt) html += USER_SECTION;
   }
   html += '</div>';
-
-  // KI-User section
-  html += `
-    <div style="margin-top:20px;border-top:1px solid #e5e9ef;padding-top:16px">
-      <div style="font-weight:600;font-size:.875rem;color:#374151;margin-bottom:10px">👥 KI-User (Lizenznehmer)</div>
-      <div id="lz-user-list"></div>
-      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-        <input id="lz-user-input" type="text" class="form-control"
-          placeholder="Name oder E-Mail eingeben…" style="flex:1"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();addLizenzUser();}">
-        <button class="btn btn-primary btn-sm" onclick="addLizenzUser()">+ Hinzufügen</button>
-      </div>
-      <div id="lz-user-count" style="font-size:12px;color:#6b7280;margin-top:6px"></div>
-    </div>`;
 
   html += `<div class="modal-footer">
     ${itemId ? `<button class="btn btn-danger btn-sm" onclick="deleteLizenz(${itemId})">Löschen</button><span style="flex:1"></span>` : ''}
