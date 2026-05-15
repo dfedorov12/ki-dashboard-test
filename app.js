@@ -56,6 +56,7 @@ const COL = {
   autoRenewal:      'AutoRenewal',
   verantwIT:        'VerantwortlicherIT',
   notizen:          'Notizen',
+  nutzer:           'KIUser',
 };
 
 const STATUS_OPTS = ['Eingereicht', 'In Prüfung', 'Genehmigt', 'Abgelehnt', 'Rückfrage'];
@@ -89,16 +90,14 @@ const ANTRAG_FIELDS = [
 ];
 
 const LIZENZ_FIELDS = [
-  { key: 'Title',            label: 'Lizenzname',            type: 'text',     req: true },
-  { key: COL.kiSystem,       label: 'KI-System',             type: 'text',     req: false },
-  { key: COL.lizenztyp,      label: 'Lizenztyp',             type: 'choice',   req: true,
-    choices: ['', 'Enterprise', 'Team', 'Pro', 'Free', 'API', 'Sonstiges'] },
+  { key: COL.kiSystem,       label: 'KI-System',             type: 'text',     req: true },
+  { key: COL.lizenztyp,      label: 'Lizenztyp',             type: 'combo',    req: false,
+    choices: ['Enterprise', 'Team', 'Pro', 'Free', 'API', 'Sonstiges'] },
   { key: COL.anbieter,       label: 'Anbieter',              type: 'text',     req: false },
   { key: COL.kosten,         label: 'Kosten (€/Periode)',    type: 'number',   req: false },
   { key: COL.rhythmus,       label: 'Abrechnungsrhythmus',   type: 'choice',   req: false,
     choices: ['', 'Monatlich', 'Jährlich', 'Einmalig'] },
   { key: COL.lizenzGesamt,   label: 'Lizenzen gesamt',       type: 'number',   req: false },
-  { key: COL.lizenzBelegt,   label: 'Lizenzen belegt',       type: 'number',   req: false },
   { key: COL.vertragsBeginn, label: 'Vertragsbeginn',        type: 'date',     req: false },
   { key: COL.vertragsEnde,   label: 'Vertragsende',          type: 'date',     req: false },
   { key: COL.kuendigungsfrist,label:'Kündigungsfrist (Tage)',type: 'number',   req: false },
@@ -117,6 +116,7 @@ let isGremium = false;
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antrag';
 let editLizenzId = null;
+let lizenzUsers = []; // current modal's user list
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
 let antragCols = null;  // null = noch nicht geladen (= kein Filter)
 
@@ -699,18 +699,18 @@ function renderLizenzen() {
     const endeCls = diff === null ? 'expiry-ok' : diff < 0 ? 'expiry-alert' : diff < 30 ? 'expiry-alert' : diff < 60 ? 'expiry-warn' : 'expiry-ok';
     const endeLabel = ende ? fmtDate(ende) : '–';
 
-    const gesamt = parseInt(f[COL.lizenzGesamt]) || 0;
-    const belegt = parseInt(f[COL.lizenzBelegt]) || 0;
-    const pct    = gesamt > 0 ? Math.min(100, Math.round(belegt / gesamt * 100)) : null;
-    const barCls = pct === null ? '' : pct >= 90 ? 'util-full' : pct >= 70 ? 'util-warn' : 'util-ok';
-    const util   = pct !== null ? `<div style="display:flex;align-items:center;gap:6px">
+    const gesamt  = parseInt(f[COL.lizenzGesamt]) || 0;
+    const users   = parseLizenzUsers(f[COL.nutzer] || '');
+    const belegt  = users.length || parseInt(f[COL.lizenzBelegt]) || 0;
+    const pct     = gesamt > 0 ? Math.min(100, Math.round(belegt / gesamt * 100)) : null;
+    const barCls  = pct === null ? '' : pct >= 90 ? 'util-full' : pct >= 70 ? 'util-warn' : 'util-ok';
+    const util    = pct !== null ? `<div style="display:flex;align-items:center;gap:6px">
       <div class="util-bar-wrap"><div class="util-bar ${barCls}" style="width:${pct}%"></div></div>
       <span style="font-size:11px;color:#6b7280">${belegt}/${gesamt}</span>
-    </div>` : '–';
+    </div>` : (belegt ? `<span style="font-size:12px;color:#6b7280">${belegt} User</span>` : '–');
 
     return `<tr onclick="openLizenzModal(${i.id})">
-      <td><strong>${esc(f.Title || '–')}</strong></td>
-      <td>${esc(f[COL.kiSystem] || '–')}</td>
+      <td><strong>${esc(f[COL.kiSystem] || f.Title || '–')}</strong></td>
       <td>${f[COL.lizenztyp] ? `<span class="badge-type">${esc(f[COL.lizenztyp])}</span>` : '–'}</td>
       <td>${esc(f[COL.anbieter] || '–')}</td>
       <td>${f[COL.kosten] ? fmtEuro(parseFloat(f[COL.kosten])) : '–'}</td>
@@ -724,7 +724,7 @@ function renderLizenzen() {
     <table>
       <thead>
         <tr>
-          <th>Lizenzname</th><th>KI-System</th><th>Typ</th><th>Anbieter</th>
+          <th>KI-System</th><th>Typ</th><th>Anbieter</th>
           <th>Kosten</th><th>Auslastung</th><th>Vertragsende</th><th>Auto-Renewal</th>
         </tr>
       </thead>
@@ -734,10 +734,52 @@ function renderLizenzen() {
 }
 
 // ─── Lizenz Modal ────────────────────────────────────────────────
+function parseLizenzUsers(str) {
+  if (!str) return [];
+  return str.split(';').map(s => s.trim()).filter(Boolean);
+}
+function serializeLizenzUsers(arr) {
+  return arr.filter(Boolean).join('; ');
+}
+function renderLizenzUserEditor() {
+  const listEl  = $id('lz-user-list');
+  const countEl = $id('lz-user-count');
+  if (!listEl) return;
+  const gesamt     = parseInt($id(`lf-${COL.lizenzGesamt}`)?.value) || 0;
+  const verfuegbar = gesamt > 0 ? Math.max(0, gesamt - lizenzUsers.length) : null;
+  listEl.innerHTML = lizenzUsers.length === 0
+    ? '<div style="color:#9ca3af;font-size:13px;padding:6px 0">Noch keine User zugewiesen</div>'
+    : lizenzUsers.map((u, i) => `
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:#f9fafb;border-radius:6px;margin-bottom:4px">
+          <span style="flex:1;font-size:13px">👤 ${esc(u)}</span>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;color:#ef4444" onclick="removeLizenzUser(${i})">×</button>
+        </div>`).join('');
+  if (countEl) {
+    countEl.textContent = lizenzUsers.length
+      ? `${lizenzUsers.length} User zugewiesen${verfuegbar !== null ? ` · ${verfuegbar} von ${gesamt} verfügbar` : ''}`
+      : '';
+  }
+}
+function addLizenzUser() {
+  const inp  = $id('lz-user-input');
+  const name = inp?.value.trim();
+  if (!name) return;
+  if (!lizenzUsers.includes(name)) lizenzUsers.push(name);
+  inp.value = '';
+  renderLizenzUserEditor();
+}
+function removeLizenzUser(index) {
+  lizenzUsers.splice(index, 1);
+  renderLizenzUserEditor();
+}
+
 function openLizenzModal(itemId) {
   editLizenzId = itemId || null;
   const item = itemId ? allLizenzen.find(i => i.id == itemId) : null;
   const f = item?.fields || {};
+
+  // Init user list from stored value
+  lizenzUsers = parseLizenzUsers(f[COL.nutzer] || '');
 
   // Neue Lizenz: Verantwortlich IT = aktuell angemeldeter User
   if (!itemId && !f[COL.verantwIT]) {
@@ -759,12 +801,31 @@ function openLizenzModal(itemId) {
       html += `<select id="lf-${field.key}" class="form-control">`;
       for (const c of field.choices) html += `<option value="${esc(c)}"${v === c ? ' selected' : ''}>${esc(c) || '– wählen –'}</option>`;
       html += '</select>';
+    } else if (field.type === 'combo') {
+      const dlId = `dl-lf-${field.key}`;
+      html += `<input id="lf-${field.key}" type="text" list="${dlId}" class="form-control" value="${esc(v)}" placeholder="Auswählen oder eingeben…">
+        <datalist id="${dlId}">${field.choices.map(c => `<option value="${esc(c)}">`).join('')}</datalist>`;
     } else {
-      html += `<input id="lf-${field.key}" type="${field.type}" class="form-control" value="${esc(v)}"/>`;
+      html += `<input id="lf-${field.key}" type="${field.type}" class="form-control" value="${esc(v)}"
+        ${field.key === COL.lizenzGesamt ? ' oninput="renderLizenzUserEditor()"' : ''}/>`;
     }
     html += '</div>';
   }
   html += '</div>';
+
+  // KI-User section
+  html += `
+    <div style="margin-top:20px;border-top:1px solid #e5e9ef;padding-top:16px">
+      <div style="font-weight:600;font-size:.875rem;color:#374151;margin-bottom:10px">👥 KI-User (Lizenznehmer)</div>
+      <div id="lz-user-list"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+        <input id="lz-user-input" type="text" class="form-control"
+          placeholder="Name oder E-Mail eingeben…" style="flex:1"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();addLizenzUser();}">
+        <button class="btn btn-primary btn-sm" onclick="addLizenzUser()">+ Hinzufügen</button>
+      </div>
+      <div id="lz-user-count" style="font-size:12px;color:#6b7280;margin-top:6px"></div>
+    </div>`;
 
   html += `<div class="modal-footer">
     ${itemId ? `<button class="btn btn-danger btn-sm" onclick="deleteLizenz(${itemId})">Löschen</button><span style="flex:1"></span>` : ''}
@@ -773,19 +834,27 @@ function openLizenzModal(itemId) {
   </div>`;
 
   $id('modal-body').innerHTML = html;
+  renderLizenzUserEditor();
   $id('modal-overlay').classList.remove('hidden');
 }
 
 async function saveLizenz() {
-  const fields = {};
+  const kiSysEl  = $id(`lf-${COL.kiSystem}`);
+  const kiSysVal = kiSysEl?.value.trim();
+  if (!kiSysVal) { alert('Bitte KI-System eingeben.'); kiSysEl?.focus(); return; }
+
+  const fields = { Title: kiSysVal }; // Title = KI-System (SP requires Title)
+
   for (const f of LIZENZ_FIELDS) {
     const el = $id(`lf-${f.key}`);
     if (!el) continue;
     const v = el.value.trim();
-    if (v !== '') fields[f.key] = spValue(f.type, v);
+    if (v !== '') fields[f.key] = spValue(f.type === 'combo' ? 'text' : f.type, v);
   }
 
-  if (!fields.Title) { alert('Bitte Lizenzname eingeben.'); return; }
+  // Users → serialized string + auto-calculate belegt
+  fields[COL.nutzer]      = serializeLizenzUsers(lizenzUsers);
+  fields[COL.lizenzBelegt] = lizenzUsers.length;
 
   try {
     if (editLizenzId) {
@@ -803,7 +872,8 @@ async function saveLizenz() {
 
 async function deleteLizenz(itemId) {
   const item = allLizenzen.find(i => i.id == itemId);
-  if (!confirm(`Lizenz "${item?.fields?.Title}" wirklich löschen?`)) return;
+  const name = item?.fields?.[COL.kiSystem] || item?.fields?.Title || 'diese Lizenz';
+  if (!confirm(`Lizenz "${name}" wirklich löschen?`)) return;
   try {
     await gDel(`/sites/${siteId}/lists/${listLizenzId}/items/${itemId}`);
     closeModal();
