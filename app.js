@@ -15,7 +15,7 @@ const LIST_REGISTER  = 'KI_Register';
 const KNOWN_SITE_ID        = 'dihag.sharepoint.com,1618712f-787b-4584-ad54-2bf68c110f15,b93e94cf-030f-4296-9756-15492a5409d9';
 const KNOWN_ANTRAEGE_GUID  = '28d7d466-6239-4575-be27-4c3873634707';
 
-// KI-Register Spaltennamen
+// KI-Register Spaltennamen (kiSystem + nutzer werden in boot() dynamisch aufgelöst)
 const COL_REG = {
   status:        'Status',
   risiko:        'Risikokategorie',
@@ -25,6 +25,8 @@ const COL_REG = {
   freigabeDatum: 'FreigabeDatum',
   anbieter:      'Anbieter',
   notizen:       'Notizen',
+  kiSystem:      null,   // z.B. 'KI_x002d_System' – wird in boot() aufgelöst
+  nutzer:        null,   // Person-Spalte im Register – wird in boot() aufgelöst
 };
 
 // SP-interne Spaltennamen (sofern abweichend von Anzeigenamme anpassen)
@@ -118,9 +120,10 @@ let currentView = 'antrag';
 let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
-let spUserMap   = {};  // email.toLowerCase()/name → SP-LookupId (Integer)
+let spUserMap    = {};   // email.toLowerCase()/name → SP-LookupId (Integer)
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
-let antragCols  = null;  // null = noch nicht geladen (= kein Filter)
+let antragCols   = null;
+let registerCols = null;
 let lizenzCols  = null;  // analog für KI_Lizenzen
 
 // ═══════════════════════════════════════════════════════════════════
@@ -388,10 +391,27 @@ async function boot() {
         allLists.map(l => `${l.name}/${l.displayName}`).join(' | '));
     }
 
-    // Register
+    // Register + Spalten-Discovery
     if (lR) {
       listRegisterId = lR.id;
       console.log('✓ KI_Register:', lR.displayName, listRegisterId);
+      try {
+        const regColData = await gGet(`/sites/${siteId}/lists/${listRegisterId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+        registerCols = new Set((regColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name));
+        console.log('Register-Spalten (alle):', (regColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
+        for (const col of (regColData.value || [])) {
+          const dn = (col.displayName || '').toLowerCase().trim();
+          if (dn === 'ki-system' || dn === 'ki system' || dn === 'kisystem' || dn === 'system') {
+            COL_REG.kiSystem = col.name;
+            console.log('✓ Register KI-System Spalte:', col.name);
+          }
+          if (dn === 'nutzer' || dn === 'benutzer' || dn === 'person' || dn === 'mitarbeiter' ||
+              dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser') {
+            COL_REG.nutzer = col.name;
+            console.log('✓ Register Nutzer-Spalte:', col.name);
+          }
+        }
+      } catch(e) { console.warn('Register-Spalten fehlgeschlagen:', e.message); }
     } else {
       console.warn('⚠ KI_Register nicht gefunden');
     }
@@ -1167,6 +1187,9 @@ function openLizenzModal(itemId) {
 
   $id('modal-title').textContent = itemId ? 'Lizenz bearbeiten' : 'Neue Lizenz erfassen';
 
+  // War dieses Item ein Entwurf? → Notizen-Feld leer zeigen
+  const isDraftItem = itemId && (f[COL.notizen] || '').startsWith('⚠ Automatisch erstellt');
+
   const USER_SECTION = `
     <div style="grid-column:1/-1;margin-top:4px;border-top:1px solid #e5e9ef;padding-top:14px">
       <div style="font-weight:600;font-size:.875rem;color:#374151;margin-bottom:10px">👥 KI-User (Lizenznehmer)</div>
@@ -1187,10 +1210,16 @@ function openLizenzModal(itemId) {
 
   let html = '<div class="form-row" style="grid-template-columns:1fr 1fr">';
   for (const field of LIZENZ_FIELDS) {
+    // Verantwortlich IT: wird beim Speichern automatisch gesetzt – nicht anzeigen
+    if (field.key === COL.verantwIT) continue;
+
     // KI-System: Title als sicherer Fallback (wird immer korrekt gesetzt)
+    // Entwurfs-Notiz: nicht vorausfüllen (leeres Feld zeigen)
     const rawVal = field.key === COL.kiSystem
       ? (f[COL.kiSystem] || f.Title || '')
-      : (f[field.key] ?? '');
+      : (isDraftItem && field.key === COL.notizen)
+        ? ''
+        : (f[field.key] ?? '');
     // yesno-Felder: SP liefert Boolean → 'Ja'/'Nein'
     let v = spDisplayValue(field.type, rawVal);
     // date-Felder: SP liefert ISO-Datetime (z.B. "2025-06-01T00:00:00Z"),
@@ -1275,11 +1304,15 @@ async function saveLizenz() {
   // (safePatch fängt 400 feldweise ab)
   const colOk = name => !lizenzCols || lizenzCols.has(name);
 
-  // Detail-Felder sammeln (ohne Title – wird separat gesetzt)
+  // War das Item ein Entwurf (automatisch erstellt)?
+  const oldLizenzItem = editLizenzId ? allLizenzen.find(i => i.id == editLizenzId) : null;
+  const wasDraft = !!(oldLizenzItem?.fields?.[COL.notizen] || '').startsWith('⚠ Automatisch erstellt');
+
+  // Detail-Felder sammeln (ohne Title und VerantwortlicherIT – werden separat gesetzt)
   const detailFields = {};
   for (const f of LIZENZ_FIELDS) {
     const el = $id(`lf-${f.key}`);
-    if (!el || f.key === COL.kiSystem) continue;
+    if (!el || f.key === COL.kiSystem || f.key === COL.verantwIT) continue;
     const v = el.value.trim();
     if (v === '') continue;
     if (!colOk(f.key)) { console.warn('Lizenz-Spalte nicht in SP-Schreibliste, übersprungen:', f.key); continue; }
@@ -1290,6 +1323,15 @@ async function saveLizenz() {
   }
   // KI-System in Detail-Felder (colOk-geprüft)
   if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
+
+  // Verantwortlich IT: wird immer auf den aktuell eingeloggten User gesetzt
+  if (colOk(COL.verantwIT)) detailFields[COL.verantwIT] = account?.name || account?.username || '';
+
+  // Entwurfs-Notiz entfernen: war das Item ein Entwurf, forcieren wir den Notizen-Wert
+  // (auch wenn der User nichts eingetippt hat → leeres '' löscht die Marker-Notiz)
+  if (wasDraft && colOk(COL.notizen)) {
+    detailFields[COL.notizen] = $id(`lf-${COL.notizen}`)?.value.trim() || '';
+  }
 
   // Personenfeld: LookupIds auflösen.
   // Graph nutzt 'LookupId'-Suffix für READ *und* WRITE (nicht 'Id' wie SP-REST!):
@@ -1358,9 +1400,68 @@ async function saveLizenz() {
     closeModal();
     allLizenzen = [];
     await loadLizenzen();
+
+    // Wenn ein Entwurf vollständig ausgefüllt wurde → KI-Register-Einträge anlegen
+    if (wasDraft && listRegisterId && lizenzUsers.length > 0) {
+      await createRegisterEntries(kiSysVal, lizenzUsers);
+      allRegister = [];
+      console.log('✓ KI-Register-Einträge nach Lizenzierung erstellt');
+    }
   } catch(e) {
     showLizenzError('Speichern fehlgeschlagen: ' + e.message);
     console.error('saveLizenz:', e);
+  }
+}
+
+// Legt für jeden Lizenznehmer einen Eintrag im KI-Register an
+async function createRegisterEntries(kiSystem, users) {
+  if (!listRegisterId) return;
+  const regColOk = k => k && (!registerCols || registerCols.has(k));
+
+  // Verwandte Antrag-Daten (Risiko, Nutzungsart, Hersteller) suchen
+  const antrag   = allAntraege.find(i =>
+    (i.fields?.Title || '').toLowerCase() === kiSystem.toLowerCase()
+  );
+  const af = antrag?.fields || {};
+
+  for (const user of users) {
+    const userName = user.name || user.email || '?';
+    try {
+      // Duplikat-Prüfung in lokalem Cache
+      const exists = allRegister.some(r => {
+        const rName = (r.fields?.Title || '').toLowerCase();
+        const rSys  = (COL_REG.kiSystem ? (r.fields?.[COL_REG.kiSystem] || '') : r.fields?.Title || '').toLowerCase();
+        return rName === userName.toLowerCase() && rSys === kiSystem.toLowerCase();
+      });
+      if (exists) { console.log('Register-Eintrag bereits vorhanden:', userName); continue; }
+
+      // POST: nur Title zuerst (sicherer)
+      const regItem = await gPost(`/sites/${siteId}/lists/${listRegisterId}/items`,
+        { fields: { Title: userName } });
+      if (!regItem?.id) continue;
+
+      // PATCH: alle bekannten Felder
+      const pf = {};
+      if (COL_REG.kiSystem && regColOk(COL_REG.kiSystem)) pf[COL_REG.kiSystem] = kiSystem;
+      if (regColOk(COL_REG.status))       pf[COL_REG.status]       = 'Aktiv';
+      if (af[COL.risiko]       && regColOk(COL_REG.risiko))       pf[COL_REG.risiko]       = af[COL.risiko];
+      if (af[COL.nutzungsart]  && regColOk(COL_REG.nutzungsart))  pf[COL_REG.nutzungsart]  = af[COL.nutzungsart];
+      if (af[COL.hersteller]   && regColOk(COL_REG.hersteller))   pf[COL_REG.hersteller]   = af[COL.hersteller];
+      if (regColOk(COL_REG.freigabeDatum)) pf[COL_REG.freigabeDatum] = new Date().toISOString().slice(0, 10);
+      // Nutzer-Personenfeld (falls im Register vorhanden)
+      if (COL_REG.nutzer && regColOk(COL_REG.nutzer) && user.spId) {
+        pf[COL_REG.nutzer + 'LookupId@odata.type'] = 'Collection(Edm.Int32)';
+        pf[COL_REG.nutzer + 'LookupId']             = [parseInt(user.spId)];
+      }
+
+      if (Object.keys(pf).length) {
+        await gPatch(`/sites/${siteId}/lists/${listRegisterId}/items/${regItem.id}/fields`, pf)
+          .catch(e => console.warn('Register-PATCH:', userName, e.message));
+      }
+      console.log('✓ Register-Eintrag:', userName, '/', kiSystem);
+    } catch(e) {
+      console.warn('Register-Eintrag fehlgeschlagen:', userName, e.message);
+    }
   }
 }
 
