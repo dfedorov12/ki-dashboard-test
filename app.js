@@ -101,7 +101,7 @@ const LIZENZ_FIELDS = [
   { key: COL.vertragsBeginn, label: 'Vertragsbeginn',        type: 'date',     req: false },
   { key: COL.vertragsEnde,   label: 'Vertragsende',          type: 'date',     req: false },
   { key: COL.kuendigungsfrist,label:'Kündigungsfrist (Tage)',type: 'number',   req: false },
-  { key: COL.autoRenewal,    label: 'Auto-Renewal',          type: 'choice',   req: false,
+  { key: COL.autoRenewal,    label: 'Auto-Renewal',          type: 'yesno',    req: false,
     choices: ['', 'Ja', 'Nein'] },
   { key: COL.verantwIT,      label: 'Verantwortlich IT',     type: 'text',     req: false },
   { key: COL.notizen,        label: 'Notizen',               type: 'textarea', req: false },
@@ -859,8 +859,9 @@ function openLizenzModal(itemId) {
   const item = itemId ? allLizenzen.find(i => i.id == itemId) : null;
   const f = item?.fields || {};
 
-  // Init user list from stored value
-  lizenzUsers = parseLizenzUsers(f[COL.nutzer] || '');
+  // Init user list from stored value (COL.nutzer kann dynamisch aufgelöst sein)
+  const userRaw = f[COL.nutzer] || '';
+  lizenzUsers = parseLizenzUsers(userRaw);
 
   // Neue Lizenz: Verantwortlich IT = aktuell angemeldeter User
   if (!itemId && !f[COL.verantwIT]) {
@@ -889,16 +890,22 @@ function openLizenzModal(itemId) {
 
   let html = '<div class="form-row" style="grid-template-columns:1fr 1fr">';
   for (const field of LIZENZ_FIELDS) {
-    const v   = f[field.key] ?? '';
+    // KI-System: Title als sicherer Fallback (wird immer korrekt gesetzt)
+    const rawVal = field.key === COL.kiSystem
+      ? (f[COL.kiSystem] || f.Title || '')
+      : (f[field.key] ?? '');
+    // yesno-Felder: SP liefert Boolean, wir zeigen 'Ja'/'Nein'
+    const v = spDisplayValue(field.type, rawVal);
+
     const cls = field.type === 'textarea' ? 'form-group full' : 'form-group';
     html += `<div class="${cls}">
       <label class="form-label" for="lf-${field.key}">${esc(field.label)}${field.req ? '<span class="req">*</span>' : ''}</label>`;
 
     if (field.type === 'textarea') {
       html += `<textarea id="lf-${field.key}" class="form-control" rows="2">${esc(v)}</textarea>`;
-    } else if (field.type === 'choice') {
+    } else if (field.type === 'choice' || field.type === 'yesno') {
       html += `<select id="lf-${field.key}" class="form-control">`;
-      for (const c of field.choices) html += `<option value="${esc(c)}"${v === c ? ' selected' : ''}>${esc(c) || '– wählen –'}</option>`;
+      for (const c of field.choices) html += `<option value="${esc(c)}"${String(v) === String(c) ? ' selected' : ''}>${esc(c) || '– wählen –'}</option>`;
       html += '</select>';
     } else if (field.type === 'combo') {
       const dlId = `dl-lf-${field.key}`;
@@ -907,7 +914,7 @@ function openLizenzModal(itemId) {
     } else {
       // KI-System beim Bearbeiten readonly (eindeutiger Schlüssel, darf nicht geändert werden)
       const isLocked = itemId && field.key === COL.kiSystem;
-      html += `<input id="lf-${field.key}" type="${field.type}" class="form-control" value="${esc(v)}"
+      html += `<input id="lf-${field.key}" type="${field.type === 'yesno' ? 'text' : field.type}" class="form-control" value="${esc(v)}"
         ${field.key === COL.lizenzGesamt ? ' oninput="renderLizenzUserEditor()"' : ''}
         ${isLocked ? ' readonly style="background:#f3f4f6;cursor:not-allowed" title="KI-System kann nach dem Anlegen nicht mehr geändert werden"' : ''}/>`;
     }
@@ -964,28 +971,28 @@ async function saveLizenz() {
     }
   }
 
-  // Spalten-Check: nur explizit bestätigte Spalten schicken
-  // lizenzCols===null → Lookup fehlgeschlagen → vorsichtshalber NUR bekannte Felder
-  const colOk = name => lizenzCols ? lizenzCols.has(name) : false;
-  // Title ist immer OK (eingebaut)
-  // KI-System nur wenn in lizenzCols bestätigt ODER als letzter Fallback
-  const kiSystemColKnown = lizenzCols ? lizenzCols.has(COL.kiSystem) : false;
+  // Spalten-Check: wenn lizenzCols geladen → nur bestätigte Spalten; sonst alles versuchen
+  // (safePatch fängt 400 feldweise ab)
+  const colOk = name => !lizenzCols || lizenzCols.has(name);
 
-  // Detail-Felder sammeln (ohne Title / kiSystem – werden separat gesetzt)
+  // Detail-Felder sammeln (ohne Title – wird separat gesetzt)
   const detailFields = {};
   for (const f of LIZENZ_FIELDS) {
     const el = $id(`lf-${f.key}`);
     if (!el || f.key === COL.kiSystem) continue;
     const v = el.value.trim();
     if (v === '') continue;
-    if (colOk(f.key)) detailFields[f.key] = spValue(f.type === 'combo' ? 'text' : f.type, v);
-    else console.warn('Lizenz-Spalte nicht in SP-Schreibliste, übersprungen:', f.key);
+    if (!colOk(f.key)) { console.warn('Lizenz-Spalte nicht in SP-Schreibliste, übersprungen:', f.key); continue; }
+    const converted = spValue(f.type === 'combo' ? 'text' : f.type, v);
+    // yesno: null bedeutet kein gültiger Wert → überspringen
+    if (converted === null) continue;
+    detailFields[f.key] = converted;
   }
-  // Users + belegt (nur wenn Spalte bekannt)
-  if (colOk(COL.nutzer))       detailFields[COL.nutzer]       = serializeLizenzUsers(lizenzUsers);
-  if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
-  // KI-System in Detail-Felder nur wenn Spalte bestätigt wurde
-  if (kiSystemColKnown)        detailFields[COL.kiSystem]     = kiSysVal;
+  // KI-System in Detail-Felder (colOk-geprüft)
+  if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
+  // User-Felder immer senden – safePatch fängt Fehler auf
+  detailFields[COL.nutzer]       = serializeLizenzUsers(lizenzUsers);
+  detailFields[COL.lizenzBelegt] = lizenzUsers.length;
 
   console.log('saveLizenz – lizenzCols:', lizenzCols ? [...lizenzCols].sort().join(',') : 'null');
   console.log('saveLizenz – Title:', kiSysVal, '| detailFields:', JSON.stringify(detailFields));
@@ -1175,7 +1182,18 @@ function $id(id) { return document.getElementById(id); }
 function spValue(type, v) {
   if (type === 'number') return parseFloat(v);
   if (type === 'date')   return v ? new Date(v).toISOString() : null;
+  // yesno: SP-Boolean-Spalten erwarten true/false, wir zeigen 'Ja'/'Nein'
+  if (type === 'yesno')  return v === 'Ja' ? true : v === 'Nein' ? false : null;
   return v;
+}
+
+// Umgekehrt: SP-Wert → Anzeige-String für yesno-Felder
+function spDisplayValue(type, v) {
+  if (type === 'yesno') {
+    if (v === true  || v === 1) return 'Ja';
+    if (v === false || v === 0) return 'Nein';
+  }
+  return v ?? '';
 }
 
 function esc(s) {
