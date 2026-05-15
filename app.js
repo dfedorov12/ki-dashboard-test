@@ -248,6 +248,9 @@ async function boot() {
       console.warn('Listen-Übersicht fehlgeschlagen:', e.message);
     }
 
+    // Alle gefundenen Listen loggen (Diagnose für UserInfo-Suche)
+    console.log('SP-Listen:', allLists.map(l => `[${l.name}]${l.displayName}`).join(' | '));
+
     const findList = key => allLists.find(
       l => l.name?.toLowerCase()        === key.toLowerCase() ||
            l.displayName?.toLowerCase() === key.toLowerCase()
@@ -256,42 +259,47 @@ async function boot() {
     const lA  = findList(LIST_ANTRAEGE);
     const lL  = findList(LIST_LIZENZEN);
     const lR  = findList(LIST_REGISTER);
+
     // User Information List – für SP-LookupId-Auflösung (Personenfelder)
-    const lUI = allLists.find(l =>
-      l.name?.toLowerCase() === 'userinfo' ||
-      (l.displayName || '').toLowerCase().includes('user information')
-    );
+    // Suche 1: in allLists (breite Suche)
+    const lUI = allLists.find(l => {
+      const n = (l.name || '').toLowerCase();
+      const d = (l.displayName || '').toLowerCase();
+      return n === 'userinfo' || n === 'user information list' ||
+             d.includes('user information') || d.includes('benutzerinformation');
+    });
     if (lUI) {
       listUserInfoId = lUI.id;
-      console.log('✓ UserInfo-Liste (aus allLists):', lUI.displayName, listUserInfoId);
+      console.log('✓ UserInfo-Liste (allLists):', lUI.displayName, listUserInfoId);
     } else {
-      // Versteckte Liste – per direktem Namen abrufen
-      for (const candidate of ['UserInfo', 'userinfo', 'User%20Information%20List']) {
+      // Suche 2: direkt per bekannten Namen/Varianten
+      for (const candidate of ['UserInfo', 'userinfo', 'User Information List']) {
         try {
-          const r = await gGet(`/sites/${siteId}/lists/${candidate}`);
-          if (r?.id) { listUserInfoId = r.id; console.log('✓ UserInfo-Liste (direkt):', r.displayName, listUserInfoId); break; }
-        } catch(e) { /* nächsten Kandidaten versuchen */ }
+          const r = await gGet(`/sites/${siteId}/lists/${encodeURIComponent(candidate)}`);
+          if (r?.id) {
+            listUserInfoId = r.id;
+            console.log('✓ UserInfo-Liste (direkt):', r.displayName, listUserInfoId);
+            break;
+          }
+        } catch(e) { /* nächsten Kandidaten */ }
       }
-      if (!listUserInfoId) console.warn('⚠ UserInfo-Liste nicht gefunden – Personenfeld-Auflösung eingeschränkt');
     }
+    if (!listUserInfoId) console.warn('⚠ UserInfo-Liste nicht gefunden – nutze Fallback-Methoden');
 
-    // SP-User-Map einmalig befüllen (email → LookupId) für schnelle Auflösung
+    // SP-User-Map befüllen: Stufe 1 – UserInfo-Liste komplett laden
     if (listUserInfoId) {
       try {
         const uiData = await gGet(
           `/sites/${siteId}/lists/${listUserInfoId}/items` +
-          `?$select=id&$expand=fields($select=EMail,Name)&$top=500`
+          `?$select=id&$expand=fields($select=EMail,Name,Title)&$top=500`
         );
         for (const item of (uiData.value || [])) {
-          const id    = parseInt(item.id);
-          const email = (item.fields?.EMail || '').toLowerCase().trim();
-          const name  = (item.fields?.Name  || '').toLowerCase().trim(); // "i:0#.f|membership|user@domain"
-          if (email) spUserMap[email] = id;
-          if (name.includes('|')) spUserMap[name.split('|').pop()] = id;
+          seedSpUser(parseInt(item.id),
+            item.fields?.EMail || '', item.fields?.Name || '', item.fields?.Title || '');
         }
-        console.log('✓ SP-User-Map:', Object.keys(spUserMap).length, 'Einträge');
+        console.log('✓ SP-User-Map (UserInfo):', Object.keys(spUserMap).length, 'Einträge');
       } catch(e) {
-        console.warn('SP-User-Map Fehler:', e.message);
+        console.warn('SP-User-Map (UserInfo) Fehler:', e.message);
       }
     }
 
@@ -385,6 +393,23 @@ async function boot() {
     }
 
     renderAntragForm();
+
+    // SP-User-Map: Stufe 2 – aus Author/Editor vorhandener Items befüllen
+    // (funktioniert auch wenn UserInfo-Liste nicht erreichbar war)
+    try {
+      const seedData = await gGet(
+        `/sites/${siteId}/lists/${listAntragId}/items` +
+        `?$select=id&$expand=fields($select=Author0LookupId,Author0EMail,Author0LookupValue,` +
+        `Editor0LookupId,Editor0EMail,Editor0LookupValue)&$top=100`
+      );
+      for (const item of (seedData.value || [])) {
+        const f = item.fields || {};
+        if (f.Author0LookupId) seedSpUser(f.Author0LookupId, f.Author0EMail || '', '', f.Author0LookupValue || '');
+        if (f.Editor0LookupId) seedSpUser(f.Editor0LookupId, f.Editor0EMail || '', '', f.Editor0LookupValue || '');
+      }
+      console.log('✓ SP-User-Map nach Seeding:', Object.keys(spUserMap).length, 'Einträge');
+    } catch(e) { console.warn('SP-User-Map Seeding fehlgeschlagen:', e.message); }
+
   } catch(e) {
     $id('boot-err').textContent       = 'Fehler beim Start: ' + e.message;
     $id('boot-spinner').style.display = 'none';
@@ -843,21 +868,57 @@ function parseLizenzUsersWithIds(fields) {
   }));
 }
 
-// E-Mail → SP-LookupId (aus vorgeladener Map)
-function resolveSpUserId(email) {
-  if (!email) return null;
-  return spUserMap[email.toLowerCase().trim()] ?? null;
+// Einen User in die Map eintragen (Email + claims-Login + Anzeigename)
+function seedSpUser(id, email, loginName, displayName) {
+  if (!id) return;
+  const n = parseInt(id);
+  if (email)       spUserMap[email.toLowerCase().trim()]          = n;
+  if (loginName && loginName.includes('|'))
+                   spUserMap[loginName.split('|').pop().toLowerCase().trim()] = n;
+  if (displayName) spUserMap['__name__' + displayName.toLowerCase().trim()]   = n;
+}
+
+// E-Mail oder Anzeigename → SP-LookupId
+// Stufe 1: Map (schnell), Stufe 2: On-Demand-Query (Fallback)
+async function resolveSpUserId(email, name) {
+  if (email) {
+    const byEmail = spUserMap[email.toLowerCase().trim()];
+    if (byEmail) return byEmail;
+  }
+  if (name) {
+    const byName = spUserMap['__name__' + name.toLowerCase().trim()];
+    if (byName) return byName;
+  }
+  // Stufe 2: On-Demand-Query gegen UserInfo-Liste
+  if (listUserInfoId && email) {
+    try {
+      const data = await gGet(
+        `/sites/${siteId}/lists/${listUserInfoId}/items` +
+        `?$select=id&$expand=fields($select=EMail,Name,Title)` +
+        `&$filter=fields/EMail eq '${email}'&$top=1`
+      );
+      const item = (data.value || [])[0];
+      if (item) {
+        const id = parseInt(item.id);
+        seedSpUser(id, item.fields?.EMail || '', item.fields?.Name || '', item.fields?.Title || '');
+        return id;
+      }
+    } catch(e) {
+      console.warn('On-Demand SP-Lookup fehlgeschlagen:', email, e.message);
+    }
+  }
+  console.warn('Kein SP-LookupId für:', name || email,
+    '| Map:', Object.keys(spUserMap).length,
+    '| Email:', email || '(leer)');
+  return null;
 }
 
 // [{name,email,spId}] → [{LookupId: N}] (für Graph PATCH)
-function buildLookupIds(users) {
+async function buildLookupIds(users) {
   const result = [];
   for (const u of users) {
-    const id = u.spId || resolveSpUserId(u.email);
+    const id = u.spId || await resolveSpUserId(u.email, u.name);
     if (id) result.push({ LookupId: id });
-    else    console.warn('Kein SP-LookupId für:', u.name || u.email,
-                         '| Map-Größe:', Object.keys(spUserMap).length,
-                         '| Email:', u.email || '(leer)');
   }
   return result;
 }
@@ -1105,7 +1166,7 @@ async function saveLizenz() {
   // Personenfeld: LookupIds auflösen und als [{LookupId: N}]-Array schreiben
   // Graph erwartet den Feldnamen mit 'Id'-Suffix für Lookup/Person-Felder
   if (lizenzUsers.length > 0) {
-    const lookupIds = buildLookupIds(lizenzUsers);
+    const lookupIds = await buildLookupIds(lizenzUsers);
     if (lookupIds.length > 0) {
       detailFields[COL.nutzer + 'Id'] = lookupIds;
       console.log('SP-User LookupIds:', JSON.stringify(lookupIds));
