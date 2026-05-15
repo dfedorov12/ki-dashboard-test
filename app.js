@@ -159,14 +159,18 @@ async function doLogin() {
 
 function logout() { msalInstance.logoutPopup({ postLogoutRedirectUri: location.href }); }
 
-// Optionaler SharePoint-REST-Token (nur wenn App-Registration SP-Berechtigung hat)
+// Optionaler SharePoint-REST-Token – versucht mehrere Scopes (wie im Ticketsystem)
 async function tryGetSpToken() {
-  try {
-    return (await msalInstance.acquireTokenSilent({
-      scopes: [`https://${SP_HOST}/Sites.ReadWrite.All`],
-      account
-    })).accessToken;
-  } catch(e) { return null; }
+  for (const scope of [
+    `https://${SP_HOST}/AllSites.FullControl`,
+    `https://${SP_HOST}/Sites.ReadWrite.All`,
+    `https://${SP_HOST}/AllSites.Write`,
+  ]) {
+    try {
+      return (await msalInstance.acquireTokenSilent({ scopes: [scope], account })).accessToken;
+    } catch(e) { /* nächsten Scope versuchen */ }
+  }
+  return null;
 }
 
 // SP-User via ensureUser (SharePoint REST) auflösen → LookupId
@@ -389,6 +393,14 @@ async function boot() {
             if (dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'ki_user') {
               COL.nutzer = col.name;
               console.log('✓ KI-User Spalte aufgelöst:', col.name);
+            }
+            // Notizen: Anzeigename 'Notizen', 'Notes', 'Bemerkungen' o.ä.
+            if (dn === 'notizen' || dn === 'notes' || dn === 'bemerkungen') {
+              const oldNot = COL.notizen;
+              COL.notizen = col.name;
+              const lf = LIZENZ_FIELDS.find(f => f.key === oldNot);
+              if (lf) lf.key = col.name;
+              console.log('✓ Notizen Spalte aufgelöst:', oldNot, '→', col.name);
             }
           }
         } catch(eCols) {
@@ -798,10 +810,27 @@ async function saveGremiumDecision(itemId, forceStatus) {
             const newLiz = await gPost(`/sites/${siteId}/lists/${listLizenzId}/items`,
               { fields: { Title: systemName } });
             if (newLiz?.id) {
-              const patch = { [COL.notizen]: '⚠ Automatisch erstellt – bitte Lizenzdetails ergänzen' };
-              if (!lizenzCols || lizenzCols.has(COL.kiSystem)) patch[COL.kiSystem] = systemName;
-              await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${newLiz.id}/fields`, patch)
-                .catch(e => console.warn('Auto-Lizenz Detail-PATCH:', e.message));
+              const draftNote = '⚠ Automatisch erstellt – bitte Lizenzdetails ergänzen';
+              const patchUrl  = `/sites/${siteId}/lists/${listLizenzId}/items/${newLiz.id}/fields`;
+
+              // KI-System setzen (feldweise, colOk-geprüft)
+              if (!lizenzCols || lizenzCols.has(COL.kiSystem)) {
+                try { await gPatch(patchUrl, { [COL.kiSystem]: systemName }); }
+                catch(e) { console.warn('Auto-Lizenz KI-System PATCH:', e.message); }
+              }
+
+              // Notizen setzen – mehrere Kandidaten durchprobieren
+              let notesSaved = false;
+              for (const nKey of [COL.notizen, 'Notizen', 'Notes', 'Bemerkungen']) {
+                if (lizenzCols && !lizenzCols.has(nKey)) continue;
+                try {
+                  await gPatch(patchUrl, { [nKey]: draftNote });
+                  COL.notizen = nKey; // korrekten Namen merken
+                  notesSaved  = true;
+                  break;
+                } catch(e) { console.warn('Auto-Lizenz Notizen (', nKey, '):', e.message); }
+              }
+              if (!notesSaved) console.warn('Auto-Lizenz: Notizen-Spalte konnte nicht gesetzt werden');
             }
             allLizenzen = []; // Lizenz-Tab beim nächsten Öffnen neu laden
             console.log('✓ Draft-Lizenz automatisch erstellt:', systemName);
@@ -1053,12 +1082,33 @@ function debounceUserSearch(q) {
 }
 
 async function searchPeople(q) {
+  const enc = encodeURIComponent(q);
   try {
-    const data = await gGet(`/me/people?$search=${encodeURIComponent(q)}&$top=8&$select=displayName,scoredEmailAddresses`);
+    // Graph /users: liefert displayName + mail → SP-freundlichste Option
+    const data = await gGet(
+      `/users?$filter=startswith(displayName,'${enc}') or startswith(mail,'${enc}')` +
+      `&$select=id,displayName,mail,userPrincipalName&$top=8`
+    );
     const people = (data.value || []).filter(p => p.displayName);
-    showPeopleDrop(people);
+    if (people.length) { showPeopleDrop(people); return; }
   } catch(e) {
-    console.warn('People-Suche fehlgeschlagen:', e.message);
+    console.warn('Benutzersuche (/users) fehlgeschlagen:', e.message);
+  }
+  // Fallback: /me/people (weniger Token-Anforderungen, aber keine Mail-Garantie)
+  try {
+    const data2 = await gGet(
+      `/me/people?$search=${enc}&$top=8&$select=displayName,scoredEmailAddresses`
+    );
+    const people2 = (data2.value || [])
+      .filter(p => p.displayName)
+      .map(p => ({
+        displayName:       p.displayName,
+        mail:              p.scoredEmailAddresses?.[0]?.address || '',
+        userPrincipalName: p.scoredEmailAddresses?.[0]?.address || '',
+      }));
+    showPeopleDrop(people2);
+  } catch(e2) {
+    console.warn('People-Suche fehlgeschlagen:', e2.message);
     hidePeopleDrop();
   }
 }
@@ -1068,15 +1118,14 @@ function showPeopleDrop(people) {
   if (!drop) return;
   if (!people.length) { drop.style.display = 'none'; return; }
   drop.innerHTML = people.map(p => {
-    const mail  = p.scoredEmailAddresses?.[0]?.address || '';
+    const mail  = p.mail || p.userPrincipalName || p.scoredEmailAddresses?.[0]?.address || '';
     const label = mail
       ? `${esc(p.displayName)} <span style="color:#9ca3af;font-size:11px">${esc(mail)}</span>`
       : esc(p.displayName);
-    // Name und E-Mail separat übergeben – kein JSON.stringify-Anführungszeichen-Problem
-    const safeName  = esc(p.displayName).replace(/'/g, '&#39;');
-    const safeEmail = esc(mail).replace(/'/g, '&#39;');
+    // data-Attribute statt Inline-String-Escaping – vermeidet SyntaxErrors
     return `<div class="people-item"
-      onmousedown="selectPerson('${safeName}','${safeEmail}')"
+      data-name="${esc(p.displayName)}" data-mail="${esc(mail)}"
+      onmousedown="selectPersonFromDrop(this)"
       onmouseover="this.classList.add('people-item-hover')"
       onmouseout="this.classList.remove('people-item-hover')"
     >👤 ${label}</div>`;
@@ -1089,14 +1138,43 @@ function hidePeopleDrop() {
   if (drop) drop.style.display = 'none';
 }
 
+// Tickets-Muster: SP-LookupId sofort beim Auswählen aus dem Dropdown auflösen
+async function selectPersonFromDrop(el) {
+  const name  = el.dataset.name || '';
+  const email = el.dataset.mail || '';
+  hidePeopleDrop();
+  const inp = $id('lz-user-input');
+  if (inp) inp.value = '';
+
+  const user = { name: name || email, email: email || '', spId: null };
+  const dup  = lizenzUsers.some(u => (u.email && u.email === user.email) || u.name === user.name);
+  if (dup) return;
+
+  lizenzUsers.push(user);
+  renderLizenzUserEditor();
+
+  // SP-LookupId jetzt direkt auflösen (nicht erst beim Speichern)
+  if (email) {
+    try {
+      const spId = await ensureSpUserViaRest(email);
+      if (spId) {
+        user.spId = spId;
+        console.log('✓ SP-User-ID aufgelöst:', name, '→', spId);
+      } else {
+        console.warn('⚠ SP-User-ID nicht aufgelöst:', name, email, '– wird ggf. beim Speichern nochmals versucht');
+      }
+    } catch(e) {
+      console.warn('ensureUser Fehler:', email, e.message);
+    }
+  }
+}
+
+// Fallback für addLizenzUser (manuelle Eingabe ohne Dropdown)
 function selectPerson(name, email) {
   hidePeopleDrop();
   const user = { name: name || email, email: email || '', spId: null };
   const dup  = lizenzUsers.some(u => (u.email && u.email === user.email) || u.name === user.name);
-  if (!dup) {
-    lizenzUsers.push(user);
-    renderLizenzUserEditor();
-  }
+  if (!dup) { lizenzUsers.push(user); renderLizenzUserEditor(); }
   const inp = $id('lz-user-input');
   if (inp) inp.value = '';
 }
