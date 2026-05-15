@@ -123,7 +123,7 @@ let antragCols = null;  // null = noch nicht geladen (= kein Filter)
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
 // ═══════════════════════════════════════════════════════════════════
-const SCOPES = ['https://graph.microsoft.com/Sites.ReadWrite.All', 'User.Read'];
+const SCOPES = ['https://graph.microsoft.com/Sites.ReadWrite.All', 'User.Read', 'People.Read'];
 
 async function initAuth() {
   const redirectUri = location.href.split('?')[0].split('#')[0];
@@ -278,6 +278,28 @@ async function boot() {
         await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
         isGremium = true;
         console.log('✓ Gremium-Zugriff bestätigt');
+
+        // Echte interne Spaltennamen der Lizenzen-Liste ermitteln
+        // (SharePoint-intern kann 'System' z.B. 'System0' heißen)
+        try {
+          const lizCols = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName&$top=200`);
+          for (const col of (lizCols.value || [])) {
+            if (col.displayName === 'System') {
+              const oldKey = COL.kiSystem;
+              COL.kiSystem = col.name;
+              // Auch LIZENZ_FIELDS-Key aktualisieren (wird zur Laufzeit genutzt)
+              const lf = LIZENZ_FIELDS.find(f => f.key === oldKey);
+              if (lf) lf.key = col.name;
+              console.log('✓ KI-System Spalte:', oldKey, '→', col.name);
+            }
+            if (col.displayName === 'KI-User') {
+              COL.nutzer = col.name;
+              console.log('✓ KI-User Spalte:', col.name);
+            }
+          }
+        } catch(eCols) {
+          console.warn('Lizenzen Spalten-Lookup fehlgeschlagen:', eCols.message);
+        }
       } catch(e) {
         if (e.status !== 403) console.warn('Lizenzen Lesezugriff:', e.message);
         else console.log('ℹ Kein Gremium-Zugriff auf Lizenzen (403)');
@@ -773,6 +795,58 @@ function removeLizenzUser(index) {
   renderLizenzUserEditor();
 }
 
+// ─── People-Autocomplete ─────────────────────────────────────────
+let _peopleTimer = null;
+
+function debounceUserSearch(q) {
+  clearTimeout(_peopleTimer);
+  if (!q || q.length < 2) { hidePeopleDrop(); return; }
+  _peopleTimer = setTimeout(() => searchPeople(q), 300);
+}
+
+async function searchPeople(q) {
+  try {
+    const data = await gGet(`/me/people?$search=${encodeURIComponent(q)}&$top=8&$select=displayName,scoredEmailAddresses`);
+    const people = (data.value || []).filter(p => p.displayName);
+    showPeopleDrop(people);
+  } catch(e) {
+    console.warn('People-Suche fehlgeschlagen:', e.message);
+    hidePeopleDrop();
+  }
+}
+
+function showPeopleDrop(people) {
+  const drop = $id('lz-people-drop');
+  if (!drop) return;
+  if (!people.length) { drop.style.display = 'none'; return; }
+  drop.innerHTML = people.map(p => {
+    const mail  = p.scoredEmailAddresses?.[0]?.address || '';
+    const label = mail
+      ? `${esc(p.displayName)} <span style="color:#9ca3af;font-size:11px">${esc(mail)}</span>`
+      : esc(p.displayName);
+    const val   = mail || p.displayName;
+    return `<div class="people-item"
+      onmousedown="selectPerson(${JSON.stringify(val)})"
+      onmouseover="this.classList.add('people-item-hover')"
+      onmouseout="this.classList.remove('people-item-hover')"
+    >👤 ${label}</div>`;
+  }).join('');
+  drop.style.display = 'block';
+}
+
+function hidePeopleDrop() {
+  const drop = $id('lz-people-drop');
+  if (drop) drop.style.display = 'none';
+}
+
+function selectPerson(val) {
+  const inp = $id('lz-user-input');
+  if (inp) inp.value = val;
+  hidePeopleDrop();
+  // User direkt hinzufügen
+  addLizenzUser();
+}
+
 function openLizenzModal(itemId) {
   editLizenzId = itemId || null;
   const item = itemId ? allLizenzen.find(i => i.id == itemId) : null;
@@ -792,11 +866,16 @@ function openLizenzModal(itemId) {
     <div style="grid-column:1/-1;margin-top:4px;border-top:1px solid #e5e9ef;padding-top:14px">
       <div style="font-weight:600;font-size:.875rem;color:#374151;margin-bottom:10px">👥 KI-User (Lizenznehmer)</div>
       <div id="lz-user-list"></div>
-      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-        <input id="lz-user-input" type="text" class="form-control"
-          placeholder="Name oder E-Mail eingeben…" style="flex:1"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();addLizenzUser();}">
-        <button class="btn btn-primary btn-sm" onclick="addLizenzUser()">+ Hinzufügen</button>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:flex-start">
+        <div style="position:relative;flex:1">
+          <input id="lz-user-input" type="text" class="form-control" autocomplete="off"
+            placeholder="Name oder E-Mail eingeben…" style="width:100%"
+            oninput="debounceUserSearch(this.value)"
+            onblur="setTimeout(hidePeopleDrop,200)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addLizenzUser();}if(event.key==='Escape'){hidePeopleDrop();}">
+          <div id="lz-people-drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:9999;max-height:220px;overflow-y:auto;margin-top:3px"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="addLizenzUser()">+ Hinzufügen</button>
       </div>
       <div id="lz-user-count" style="font-size:12px;color:#6b7280;margin-top:6px"></div>
     </div>`;
