@@ -1048,12 +1048,13 @@ async function resolveSpUserId(email, name) {
   return null;
 }
 
-// [{name,email,spId}] → [{LookupId: N}] (für Graph PATCH)
+// [{name,email,spId}] → [N, N2, …] – einfache Integer-Array für Graph Collection(Edm.Int32)
+// (SP-REST erwartet {LookupId: N}, Graph erwartet plain integers + @odata.type-Annotation)
 async function buildLookupIds(users) {
   const result = [];
   for (const u of users) {
     const id = u.spId || await resolveSpUserId(u.email, u.name);
-    if (id) result.push({ LookupId: id });
+    if (id) result.push(parseInt(id));
   }
   return result;
 }
@@ -1347,19 +1348,24 @@ async function saveLizenz() {
   // KI-System in Detail-Felder (colOk-geprüft)
   if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
 
-  // Personenfeld: LookupIds auflösen und als [{LookupId: N}]-Array schreiben
-  // Graph erwartet den Feldnamen mit 'Id'-Suffix für Lookup/Person-Felder
+  // Personenfeld: LookupIds auflösen.
+  // Graph erwartet: {FieldId@odata.type: "Collection(Edm.Int32)", FieldId: [42, 43, …]}
+  // (SP-REST nutzt [{LookupId: N}] – das ist hier falsch!)
+  const nutzerIdKey      = COL.nutzer + 'Id';
+  const nutzerOdataKey   = nutzerIdKey + '@odata.type';
   if (lizenzUsers.length > 0) {
     const lookupIds = await buildLookupIds(lizenzUsers);
     if (lookupIds.length > 0) {
-      detailFields[COL.nutzer + 'Id'] = lookupIds;
-      console.log('SP-User LookupIds:', JSON.stringify(lookupIds));
+      detailFields[nutzerOdataKey] = 'Collection(Edm.Int32)';
+      detailFields[nutzerIdKey]    = lookupIds;
+      console.log('SP-User LookupIds (Graph-Format):', JSON.stringify(lookupIds));
     } else {
       console.warn('Keine SP-LookupIds aufgelöst – User-Feld wird nicht gesetzt');
     }
   } else {
     // Leere Auswahl: Feld leeren
-    detailFields[COL.nutzer + 'Id'] = [];
+    detailFields[nutzerOdataKey] = 'Collection(Edm.Int32)';
+    detailFields[nutzerIdKey]    = [];
   }
   if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
 
@@ -1367,6 +1373,7 @@ async function saveLizenz() {
   console.log('saveLizenz – Title:', kiSysVal, '| detailFields:', JSON.stringify(detailFields));
 
   // Hilfsfunktion: PATCH-Versuch, bei Fehler feldweise retry
+  // @odata.type-Annotationen werden immer zusammen mit dem Hauptfeld übertragen
   const safePatch = async (url, fields) => {
     if (!Object.keys(fields).length) return;
     try {
@@ -1374,7 +1381,12 @@ async function saveLizenz() {
     } catch(ePatch) {
       console.warn('Bulk-PATCH fehlgeschlagen, versuche feldweise:', ePatch.message);
       for (const [k, v] of Object.entries(fields)) {
-        try { await gPatch(url, { [k]: v }); }
+        if (k.includes('@odata.type')) continue;  // kommt mit seinem Hauptfeld mit
+        const odataKey   = k + '@odata.type';
+        const fieldPatch = fields[odataKey] !== undefined
+          ? { [odataKey]: fields[odataKey], [k]: v }
+          : { [k]: v };
+        try { await gPatch(url, fieldPatch); }
         catch(ef) { console.warn(`Feld "${k}" konnte nicht gespeichert werden:`, ef.message); }
       }
     }
