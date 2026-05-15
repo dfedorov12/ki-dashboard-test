@@ -127,7 +127,12 @@ let lizenzCols  = null;  // analog für KI_Lizenzen
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
 // ═══════════════════════════════════════════════════════════════════
-const SCOPES = ['https://graph.microsoft.com/Sites.ReadWrite.All', 'User.Read', 'People.Read'];
+const SCOPES = [
+  'https://graph.microsoft.com/Sites.ReadWrite.All',
+  'User.Read',
+  'People.Read',
+  'User.ReadBasic.All',  // für /users?$filter=startswith(...) Personensuche
+];
 
 async function initAuth() {
   const redirectUri = location.href.split('?')[0].split('#')[0];
@@ -174,6 +179,7 @@ async function tryGetSpToken() {
 }
 
 // SP-User via ensureUser (SharePoint REST) auflösen → LookupId
+// Wichtig: logonName (Kleinbuchstabe n) + odata=verbose wie im SP-REST-Standard
 async function ensureSpUserViaRest(email) {
   const token = await tryGetSpToken();
   if (!token) return null;
@@ -184,16 +190,23 @@ async function ensureSpUserViaRest(email) {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
+          Accept: 'application/json;odata=verbose',
+          'Content-Type': 'application/json;odata=verbose',
+          'X-RequestDigest': 'noreply',   // verhindert CSRF-Fehler in manchen SP-Konfigurationen
         },
-        body: JSON.stringify({ logOnName: `i:0#.f|membership|${email}` })
+        body: JSON.stringify({ logonName: `i:0#.f|membership|${email}` })
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.status);
+      console.warn('ensureUser HTTP-Fehler:', res.status, errText);
+      return null;
+    }
     const d = await res.json();
-    const id = d.Id ?? d.id ?? null;
-    if (id) { seedSpUser(id, email, '', d.Title || ''); return id; }
+    // odata=verbose: Antwort liegt in d.d
+    const u = d.d ?? d;
+    const id = u.Id ?? u.id ?? null;
+    if (id) { seedSpUser(id, email, '', u.Title || ''); return id; }
   } catch(e) { console.warn('ensureUser fehlgeschlagen:', email, e.message); }
   return null;
 }
@@ -863,6 +876,20 @@ async function loadLizenzen() {
   try {
     const data = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=*)&$top=999`);
     allLizenzen = data.value || [];
+
+    // spUserMap aus vorhandenen Lizenz-Einträgen befüllen (KI-User-Feld enthält LookupIds)
+    for (const item of allLizenzen) {
+      const f = item.fields || {};
+      const names = Array.isArray(f[COL.nutzer]) ? f[COL.nutzer] : (f[COL.nutzer] ? [f[COL.nutzer]] : []);
+      const ids   = Array.isArray(f[COL.nutzer+'LookupId']) ? f[COL.nutzer+'LookupId'] : (f[COL.nutzer+'LookupId'] ? [f[COL.nutzer+'LookupId']] : []);
+      names.forEach((n, i) => {
+        const name  = typeof n === 'string' ? n : (n?.LookupValue || '');
+        const spId  = ids[i];
+        if (name && spId) seedSpUser(spId, '', '', name);
+      });
+    }
+    console.log('✓ SP-User-Map nach Lizenzen-Seeding:', Object.keys(spUserMap).length, 'Einträge');
+
     renderLizenzen();
   } catch(e) {
     $id('lizenzen-loading').textContent = 'Fehler: ' + e.message;
