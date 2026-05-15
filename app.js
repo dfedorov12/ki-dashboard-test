@@ -116,7 +116,9 @@ let isGremium = false;
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antrag';
 let editLizenzId = null;
-let lizenzUsers = []; // current modal's user list
+// lizenzUsers: [{name: string, email: string, spId: number|null}]
+let lizenzUsers = [];
+let listUserInfoId = null; // SP User Information List – für LookupId-Auflösung
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
 let antragCols  = null;  // null = noch nicht geladen (= kein Filter)
 let lizenzCols  = null;  // analog für KI_Lizenzen
@@ -250,9 +252,16 @@ async function boot() {
            l.displayName?.toLowerCase() === key.toLowerCase()
     );
 
-    const lA = findList(LIST_ANTRAEGE);
-    const lL = findList(LIST_LIZENZEN);
-    const lR = findList(LIST_REGISTER);
+    const lA  = findList(LIST_ANTRAEGE);
+    const lL  = findList(LIST_LIZENZEN);
+    const lR  = findList(LIST_REGISTER);
+    // User Information List – für SP-User-ID-Auflösung (Personenfelder)
+    const lUI = allLists.find(l =>
+      l.name?.toLowerCase() === 'userinfo' ||
+      (l.displayName || '').toLowerCase().includes('user information')
+    );
+    if (lUI) { listUserInfoId = lUI.id; console.log('✓ UserInfo-Liste:', lUI.displayName, listUserInfoId); }
+    else      console.warn('⚠ UserInfo-Liste nicht gefunden – SP-User-ID-Auflösung eingeschränkt');
 
     // Antraege: dynamisch oder bekannte GUID als Fallback
     listAntragId = lA?.id || KNOWN_ANTRAEGE_GUID;
@@ -732,7 +741,7 @@ function renderLizenzen() {
     const endeLabel = ende ? fmtDate(ende) : '–';
 
     const gesamt  = parseInt(f[COL.lizenzGesamt]) || 0;
-    const users   = parseLizenzUsers(f[COL.nutzer] || '');
+    const users   = parseLizenzUsersWithIds(f);
     const belegt  = users.length || parseInt(f[COL.lizenzBelegt]) || 0;
     const pct     = gesamt > 0 ? Math.min(100, Math.round(belegt / gesamt * 100)) : null;
     const barCls  = pct === null ? '' : pct >= 90 ? 'util-full' : pct >= 70 ? 'util-warn' : 'util-ok';
@@ -766,13 +775,70 @@ function renderLizenzen() {
 }
 
 // ─── Lizenz Modal ────────────────────────────────────────────────
-function parseLizenzUsers(str) {
-  if (!str) return [];
-  return str.split(';').map(s => s.trim()).filter(Boolean);
+
+// SP-Personenfeld (Graph) → [{name, email, spId}]
+function parseLizenzUsers(val) {
+  if (!val) return [];
+  // Array: SP gibt Personenfelder als Array zurück
+  if (Array.isArray(val)) {
+    return val.map(u => {
+      if (typeof u === 'object' && u !== null)
+        return { name: u.LookupValue || u.Title || u.displayName || '', email: u.EMail || u.email || '', spId: u.LookupId || null };
+      const s = String(u).trim();
+      return { name: s, email: s.includes('@') ? s : '', spId: null };
+    }).filter(u => u.name || u.email);
+  }
+  // Fallback: alter Semikolon-Text (Migrationspfad)
+  if (typeof val === 'string') {
+    return val.split(';').map(s => s.trim()).filter(Boolean).map(s => ({
+      name: s, email: s.includes('@') ? s : '', spId: null
+    }));
+  }
+  return [];
 }
-function serializeLizenzUsers(arr) {
-  return arr.filter(Boolean).join('; ');
+
+// LookupIds-Array-Variante aus fields (Graph gibt KIUserLookupId separat zurück)
+function parseLizenzUsersWithIds(fields) {
+  const nameVal = fields[COL.nutzer];
+  const idVal   = fields[COL.nutzer + 'LookupId'];
+  const names   = Array.isArray(nameVal) ? nameVal : (nameVal ? [nameVal] : []);
+  const ids     = Array.isArray(idVal)   ? idVal   : (idVal   ? [idVal]   : []);
+  if (!names.length && !ids.length) return [];
+  return names.map((n, i) => ({
+    name:  typeof n === 'string' ? n : (n?.LookupValue || String(n)),
+    email: '',
+    spId:  ids[i] ?? null
+  }));
 }
+
+// E-Mail → SP-User-ID via User Information List
+async function resolveSpUserId(email) {
+  if (!listUserInfoId || !email) return null;
+  try {
+    const data = await gGet(
+      `/sites/${siteId}/lists/${listUserInfoId}/items?$select=id&$expand=fields($select=EMail)` +
+      `&$filter=fields/EMail eq '${email}'&$top=1`
+    );
+    const item = (data.value || [])[0];
+    return item ? parseInt(item.id) : null;
+  } catch(e) {
+    console.warn('SP-User-ID nicht aufgelöst für', email, ':', e.message);
+    return null;
+  }
+}
+
+// [{name,email,spId}] → [{LookupId: N}] (für Graph PATCH)
+async function buildLookupIds(users) {
+  const result = [];
+  for (const u of users) {
+    let id = u.spId;
+    if (!id && u.email) id = await resolveSpUserId(u.email);
+    if (id) result.push({ LookupId: id });
+    else    console.warn('Kein SP-LookupId für:', u.name || u.email);
+  }
+  return result;
+}
+
 function renderLizenzUserEditor() {
   const listEl  = $id('lz-user-list');
   const countEl = $id('lz-user-count');
@@ -783,8 +849,11 @@ function renderLizenzUserEditor() {
     ? '<div style="color:#9ca3af;font-size:13px;padding:6px 0">Noch keine User zugewiesen</div>'
     : lizenzUsers.map((u, i) => `
         <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:#f9fafb;border-radius:6px;margin-bottom:4px">
-          <span style="flex:1;font-size:13px">👤 ${esc(u)}</span>
-          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;color:#ef4444" onclick="removeLizenzUser(${i})">×</button>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px">👤 ${esc(u.name || u.email || '?')}</div>
+            ${u.email && u.email !== u.name ? `<div style="font-size:11px;color:#9ca3af;margin-top:1px">${esc(u.email)}</div>` : ''}
+          </div>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;color:#ef4444;flex-shrink:0" onclick="removeLizenzUser(${i})">×</button>
         </div>`).join('');
   if (countEl) {
     countEl.textContent = lizenzUsers.length
@@ -792,14 +861,20 @@ function renderLizenzUserEditor() {
       : '';
   }
 }
+
 function addLizenzUser() {
-  const inp  = $id('lz-user-input');
-  const name = inp?.value.trim();
-  if (!name) return;
-  if (!lizenzUsers.includes(name)) lizenzUsers.push(name);
+  const inp = $id('lz-user-input');
+  const val = inp?.value.trim();
+  if (!val) return;
+  const isEmail = val.includes('@');
+  const user = { name: val, email: isEmail ? val : '', spId: null };
+  const dup  = lizenzUsers.some(u => (u.email && u.email === user.email) || u.name === user.name);
+  if (!dup) lizenzUsers.push(user);
   inp.value = '';
+  hidePeopleDrop();
   renderLizenzUserEditor();
 }
+
 function removeLizenzUser(index) {
   lizenzUsers.splice(index, 1);
   renderLizenzUserEditor();
@@ -834,11 +909,11 @@ function showPeopleDrop(people) {
     const label = mail
       ? `${esc(p.displayName)} <span style="color:#9ca3af;font-size:11px">${esc(mail)}</span>`
       : esc(p.displayName);
-    const val   = mail || p.displayName;
-    // JSON.stringify liefert "...", dessen " im HTML-Attribut escaped werden müssen
-    const safeVal = JSON.stringify(val).replace(/"/g, '&quot;');
+    // Name und E-Mail separat übergeben – kein JSON.stringify-Anführungszeichen-Problem
+    const safeName  = esc(p.displayName).replace(/'/g, '&#39;');
+    const safeEmail = esc(mail).replace(/'/g, '&#39;');
     return `<div class="people-item"
-      onmousedown="selectPerson(${safeVal})"
+      onmousedown="selectPerson('${safeName}','${safeEmail}')"
       onmouseover="this.classList.add('people-item-hover')"
       onmouseout="this.classList.remove('people-item-hover')"
     >👤 ${label}</div>`;
@@ -851,12 +926,16 @@ function hidePeopleDrop() {
   if (drop) drop.style.display = 'none';
 }
 
-function selectPerson(val) {
-  const inp = $id('lz-user-input');
-  if (inp) inp.value = val;
+function selectPerson(name, email) {
   hidePeopleDrop();
-  // User direkt hinzufügen
-  addLizenzUser();
+  const user = { name: name || email, email: email || '', spId: null };
+  const dup  = lizenzUsers.some(u => (u.email && u.email === user.email) || u.name === user.name);
+  if (!dup) {
+    lizenzUsers.push(user);
+    renderLizenzUserEditor();
+  }
+  const inp = $id('lz-user-input');
+  if (inp) inp.value = '';
 }
 
 function openLizenzModal(itemId) {
@@ -864,9 +943,10 @@ function openLizenzModal(itemId) {
   const item = itemId ? allLizenzen.find(i => i.id == itemId) : null;
   const f = item?.fields || {};
 
-  // Init user list from stored value (COL.nutzer kann dynamisch aufgelöst sein)
-  const userRaw = f[COL.nutzer] || '';
-  lizenzUsers = parseLizenzUsers(userRaw);
+  // Personenfeld lesen: Graph gibt Namen-Array + LookupId-Array separat zurück
+  lizenzUsers = parseLizenzUsersWithIds(f);
+  // Fallback: älteres Textformat (Semikolon-getrennt)
+  if (!lizenzUsers.length && f[COL.nutzer]) lizenzUsers = parseLizenzUsers(f[COL.nutzer]);
 
   // Neue Lizenz: Verantwortlich IT = aktuell angemeldeter User
   if (!itemId && !f[COL.verantwIT]) {
@@ -998,9 +1078,22 @@ async function saveLizenz() {
   }
   // KI-System in Detail-Felder (colOk-geprüft)
   if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
-  // User-Felder immer senden – safePatch fängt Fehler auf
-  detailFields[COL.nutzer]       = serializeLizenzUsers(lizenzUsers);
-  detailFields[COL.lizenzBelegt] = lizenzUsers.length;
+
+  // Personenfeld: LookupIds auflösen und als [{LookupId: N}]-Array schreiben
+  // Graph erwartet den Feldnamen mit 'Id'-Suffix für Lookup/Person-Felder
+  if (lizenzUsers.length > 0) {
+    const lookupIds = await buildLookupIds(lizenzUsers);
+    if (lookupIds.length > 0) {
+      detailFields[COL.nutzer + 'Id'] = lookupIds;
+      console.log('SP-User LookupIds:', JSON.stringify(lookupIds));
+    } else {
+      console.warn('Keine SP-LookupIds aufgelöst – User-Feld wird nicht gesetzt');
+    }
+  } else {
+    // Leere Auswahl: Feld leeren
+    detailFields[COL.nutzer + 'Id'] = [];
+  }
+  if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
 
   console.log('saveLizenz – lizenzCols:', lizenzCols ? [...lizenzCols].sort().join(',') : 'null');
   console.log('saveLizenz – Title:', kiSysVal, '| detailFields:', JSON.stringify(detailFields));
