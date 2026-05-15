@@ -964,8 +964,12 @@ async function saveLizenz() {
     }
   }
 
-  // Spalten-Check: ungültige Felder überspringen (wie bei submitAntrag)
-  const colOk = name => !lizenzCols || lizenzCols.has(name);
+  // Spalten-Check: nur explizit bestätigte Spalten schicken
+  // lizenzCols===null → Lookup fehlgeschlagen → vorsichtshalber NUR bekannte Felder
+  const colOk = name => lizenzCols ? lizenzCols.has(name) : false;
+  // Title ist immer OK (eingebaut)
+  // KI-System nur wenn in lizenzCols bestätigt ODER als letzter Fallback
+  const kiSystemColKnown = lizenzCols ? lizenzCols.has(COL.kiSystem) : false;
 
   // Detail-Felder sammeln (ohne Title / kiSystem – werden separat gesetzt)
   const detailFields = {};
@@ -975,37 +979,53 @@ async function saveLizenz() {
     const v = el.value.trim();
     if (v === '') continue;
     if (colOk(f.key)) detailFields[f.key] = spValue(f.type === 'combo' ? 'text' : f.type, v);
-    else console.warn('Lizenz-Spalte nicht in SP gefunden, übersprungen:', f.key);
+    else console.warn('Lizenz-Spalte nicht in SP-Schreibliste, übersprungen:', f.key);
   }
-  // Users + belegt
-  if (colOk(COL.nutzer))      detailFields[COL.nutzer]      = serializeLizenzUsers(lizenzUsers);
+  // Users + belegt (nur wenn Spalte bekannt)
+  if (colOk(COL.nutzer))       detailFields[COL.nutzer]       = serializeLizenzUsers(lizenzUsers);
   if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
-  // KI-System auch in Detail-Felder, falls Spaltenname aufgelöst wurde
-  if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
+  // KI-System in Detail-Felder nur wenn Spalte bestätigt wurde
+  if (kiSystemColKnown)        detailFields[COL.kiSystem]     = kiSysVal;
 
-  console.log('saveLizenz – Title:', kiSysVal, '| detail fields:', JSON.stringify(detailFields));
+  console.log('saveLizenz – lizenzCols:', lizenzCols ? [...lizenzCols].sort().join(',') : 'null');
+  console.log('saveLizenz – Title:', kiSysVal, '| detailFields:', JSON.stringify(detailFields));
+
+  // Hilfsfunktion: PATCH-Versuch, bei Fehler feldweise retry
+  const safePatch = async (url, fields) => {
+    if (!Object.keys(fields).length) return;
+    try {
+      await gPatch(url, fields);
+    } catch(ePatch) {
+      console.warn('Bulk-PATCH fehlgeschlagen, versuche feldweise:', ePatch.message);
+      for (const [k, v] of Object.entries(fields)) {
+        try { await gPatch(url, { [k]: v }); }
+        catch(ef) { console.warn(`Feld "${k}" konnte nicht gespeichert werden:`, ef.message); }
+      }
+    }
+  };
 
   try {
     if (editLizenzId) {
-      // PATCH: Title + alle Details in einem Aufruf
-      await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${editLizenzId}/fields`,
-        { Title: kiSysVal, ...detailFields });
+      // PATCH: Title immer + bestätigte Detail-Felder
+      await safePatch(
+        `/sites/${siteId}/lists/${listLizenzId}/items/${editLizenzId}/fields`,
+        { Title: kiSysVal, ...detailFields }
+      );
     } else {
-      // Schritt 1: Item mit nur Title anlegen (vermeidet 500 bei unbekannten Feldern)
+      // Schritt 1: Item mit nur Title anlegen
       const newItem = await gPost(`/sites/${siteId}/lists/${listLizenzId}/items`,
         { fields: { Title: kiSysVal } });
       if (!newItem?.id) throw new Error('Kein Item-ID in der Antwort');
-      // Schritt 2: Details per PATCH setzen
-      if (Object.keys(detailFields).length) {
-        await gPatch(`/sites/${siteId}/lists/${listLizenzId}/items/${newItem.id}/fields`,
-          detailFields);
-      }
+      // Schritt 2: Details per PATCH (mit feldweisem Fallback)
+      await safePatch(
+        `/sites/${siteId}/lists/${listLizenzId}/items/${newItem.id}/fields`,
+        detailFields
+      );
     }
     closeModal();
     allLizenzen = [];
     await loadLizenzen();
   } catch(e) {
-    // Kein alert – Modal bleibt offen, Fehlermeldung inline, Formulardaten bleiben erhalten
     showLizenzError('Speichern fehlgeschlagen: ' + e.message);
     console.error('saveLizenz:', e);
   }
