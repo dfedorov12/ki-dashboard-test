@@ -118,8 +118,7 @@ let currentView = 'antrag';
 let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
-let listUserInfoId = null;          // SP User Information List
-let spUserMap     = {};             // email.toLowerCase() → SP-LookupId (Integer)
+let spUserMap   = {};  // email.toLowerCase()/name → SP-LookupId (Integer)
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
 let antragCols  = null;  // null = noch nicht geladen (= kein Filter)
 let lizenzCols  = null;  // analog für KI_Lizenzen
@@ -300,9 +299,6 @@ async function boot() {
       console.warn('Listen-Übersicht fehlgeschlagen:', e.message);
     }
 
-    // Alle gefundenen Listen loggen (Diagnose für UserInfo-Suche)
-    console.log('SP-Listen:', allLists.map(l => `[${l.name}]${l.displayName}`).join(' | '));
-
     const findList = key => allLists.find(
       l => l.name?.toLowerCase()        === key.toLowerCase() ||
            l.displayName?.toLowerCase() === key.toLowerCase()
@@ -311,49 +307,6 @@ async function boot() {
     const lA  = findList(LIST_ANTRAEGE);
     const lL  = findList(LIST_LIZENZEN);
     const lR  = findList(LIST_REGISTER);
-
-    // User Information List – für SP-LookupId-Auflösung (Personenfelder)
-    // Suche 1: in allLists (breite Suche)
-    const lUI = allLists.find(l => {
-      const n = (l.name || '').toLowerCase();
-      const d = (l.displayName || '').toLowerCase();
-      return n === 'userinfo' || n === 'user information list' ||
-             d.includes('user information') || d.includes('benutzerinformation');
-    });
-    if (lUI) {
-      listUserInfoId = lUI.id;
-      console.log('✓ UserInfo-Liste (allLists):', lUI.displayName, listUserInfoId);
-    } else {
-      // Suche 2: direkt per bekannten Namen/Varianten
-      for (const candidate of ['UserInfo', 'userinfo', 'User Information List']) {
-        try {
-          const r = await gGet(`/sites/${siteId}/lists/${encodeURIComponent(candidate)}`);
-          if (r?.id) {
-            listUserInfoId = r.id;
-            console.log('✓ UserInfo-Liste (direkt):', r.displayName, listUserInfoId);
-            break;
-          }
-        } catch(e) { /* nächsten Kandidaten */ }
-      }
-    }
-    if (!listUserInfoId) console.warn('⚠ UserInfo-Liste nicht gefunden – nutze Fallback-Methoden');
-
-    // SP-User-Map befüllen: Stufe 1 – UserInfo-Liste komplett laden
-    if (listUserInfoId) {
-      try {
-        const uiData = await gGet(
-          `/sites/${siteId}/lists/${listUserInfoId}/items` +
-          `?$select=id&$expand=fields($select=EMail,Name,Title)&$top=500`
-        );
-        for (const item of (uiData.value || [])) {
-          seedSpUser(parseInt(item.id),
-            item.fields?.EMail || '', item.fields?.Name || '', item.fields?.Title || '');
-        }
-        console.log('✓ SP-User-Map (UserInfo):', Object.keys(spUserMap).length, 'Einträge');
-      } catch(e) {
-        console.warn('SP-User-Map (UserInfo) Fehler:', e.message);
-      }
-    }
 
     // Antraege: dynamisch oder bekannte GUID als Fallback
     listAntragId = lA?.id || KNOWN_ANTRAEGE_GUID;
@@ -1011,7 +964,8 @@ function seedSpUser(id, email, loginName, displayName) {
 }
 
 // E-Mail oder Anzeigename → SP-LookupId
-// Stufe 1: Map (schnell), Stufe 2: On-Demand-Query (Fallback)
+// Stufe 1: spUserMap (befüllt aus Lizenzen-/Antrags-Items beim Laden)
+// Stufe 2: SharePoint REST ensureUser (braucht SP-Scope in App-Registration)
 async function resolveSpUserId(email, name) {
   if (email) {
     const byEmail = spUserMap[email.toLowerCase().trim()];
@@ -1021,25 +975,7 @@ async function resolveSpUserId(email, name) {
     const byName = spUserMap['__name__' + name.toLowerCase().trim()];
     if (byName) return byName;
   }
-  // Stufe 2: On-Demand-Query gegen UserInfo-Liste (falls vorhanden)
-  if (listUserInfoId && email) {
-    try {
-      const data = await gGet(
-        `/sites/${siteId}/lists/${listUserInfoId}/items` +
-        `?$select=id&$expand=fields($select=EMail,Name,Title)` +
-        `&$filter=fields/EMail eq '${email}'&$top=1`
-      );
-      const item = (data.value || [])[0];
-      if (item) {
-        const id = parseInt(item.id);
-        seedSpUser(id, item.fields?.EMail || '', item.fields?.Name || '', item.fields?.Title || '');
-        return id;
-      }
-    } catch(e) {
-      console.warn('On-Demand SP-Lookup fehlgeschlagen:', email, e.message);
-    }
-  }
-  // Stufe 3: SharePoint REST ensureUser (braucht SP-Scope in App-Registration)
+  // Stufe 2: SharePoint REST ensureUser (funktioniert wenn SP-Scope in App-Registration)
   if (email) {
     const id = await ensureSpUserViaRest(email);
     if (id) return id;
