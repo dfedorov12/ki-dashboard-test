@@ -288,18 +288,23 @@ async function boot() {
             (lizColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
           );
           console.log('✓ Lizenzen-Spalten:', [...lizenzCols].sort().join(', '));
+          // Alle Spalten loggen für Diagnose
+          console.log('Lizenzen-Spalten (alle):', (lizColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
+
           for (const col of (lizColData.value || [])) {
-            if (col.displayName === 'System') {
+            const dn = (col.displayName || '').toLowerCase().trim();
+            // KI-System: Anzeigename 'System' (oder Varianten)
+            if (dn === 'system' || dn === 'ki-system' || dn === 'kisystem') {
               const oldKey = COL.kiSystem;
               COL.kiSystem = col.name;
-              // Auch LIZENZ_FIELDS-Key aktualisieren (wird zur Laufzeit genutzt)
               const lf = LIZENZ_FIELDS.find(f => f.key === oldKey);
               if (lf) lf.key = col.name;
-              console.log('✓ KI-System Spalte:', oldKey, '→', col.name);
+              console.log('✓ KI-System Spalte aufgelöst:', oldKey, '→', col.name);
             }
-            if (col.displayName === 'KI-User') {
+            // KI-User: Anzeigename 'KI-User', 'KI User', 'KIUser', 'User' o.ä.
+            if (dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'ki_user') {
               COL.nutzer = col.name;
-              console.log('✓ KI-User Spalte:', col.name);
+              console.log('✓ KI-User Spalte aufgelöst:', col.name);
             }
           }
         } catch(eCols) {
@@ -894,8 +899,11 @@ function openLizenzModal(itemId) {
     const rawVal = field.key === COL.kiSystem
       ? (f[COL.kiSystem] || f.Title || '')
       : (f[field.key] ?? '');
-    // yesno-Felder: SP liefert Boolean, wir zeigen 'Ja'/'Nein'
-    const v = spDisplayValue(field.type, rawVal);
+    // yesno-Felder: SP liefert Boolean → 'Ja'/'Nein'
+    let v = spDisplayValue(field.type, rawVal);
+    // date-Felder: SP liefert ISO-Datetime (z.B. "2025-06-01T00:00:00Z"),
+    // <input type="date"> braucht "yyyy-MM-dd"
+    if (field.type === 'date' && v) v = String(v).slice(0, 10);
 
     const cls = field.type === 'textarea' ? 'form-group full' : 'form-group';
     html += `<div class="${cls}">
