@@ -118,7 +118,8 @@ let currentView = 'antrag';
 let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
-let listUserInfoId = null; // SP User Information List – für LookupId-Auflösung
+let listUserInfoId = null;          // SP User Information List
+let spUserMap     = {};             // email.toLowerCase() → SP-LookupId (Integer)
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
 let antragCols  = null;  // null = noch nicht geladen (= kein Filter)
 let lizenzCols  = null;  // analog für KI_Lizenzen
@@ -255,13 +256,44 @@ async function boot() {
     const lA  = findList(LIST_ANTRAEGE);
     const lL  = findList(LIST_LIZENZEN);
     const lR  = findList(LIST_REGISTER);
-    // User Information List – für SP-User-ID-Auflösung (Personenfelder)
+    // User Information List – für SP-LookupId-Auflösung (Personenfelder)
     const lUI = allLists.find(l =>
       l.name?.toLowerCase() === 'userinfo' ||
       (l.displayName || '').toLowerCase().includes('user information')
     );
-    if (lUI) { listUserInfoId = lUI.id; console.log('✓ UserInfo-Liste:', lUI.displayName, listUserInfoId); }
-    else      console.warn('⚠ UserInfo-Liste nicht gefunden – SP-User-ID-Auflösung eingeschränkt');
+    if (lUI) {
+      listUserInfoId = lUI.id;
+      console.log('✓ UserInfo-Liste (aus allLists):', lUI.displayName, listUserInfoId);
+    } else {
+      // Versteckte Liste – per direktem Namen abrufen
+      for (const candidate of ['UserInfo', 'userinfo', 'User%20Information%20List']) {
+        try {
+          const r = await gGet(`/sites/${siteId}/lists/${candidate}`);
+          if (r?.id) { listUserInfoId = r.id; console.log('✓ UserInfo-Liste (direkt):', r.displayName, listUserInfoId); break; }
+        } catch(e) { /* nächsten Kandidaten versuchen */ }
+      }
+      if (!listUserInfoId) console.warn('⚠ UserInfo-Liste nicht gefunden – Personenfeld-Auflösung eingeschränkt');
+    }
+
+    // SP-User-Map einmalig befüllen (email → LookupId) für schnelle Auflösung
+    if (listUserInfoId) {
+      try {
+        const uiData = await gGet(
+          `/sites/${siteId}/lists/${listUserInfoId}/items` +
+          `?$select=id&$expand=fields($select=EMail,Name)&$top=500`
+        );
+        for (const item of (uiData.value || [])) {
+          const id    = parseInt(item.id);
+          const email = (item.fields?.EMail || '').toLowerCase().trim();
+          const name  = (item.fields?.Name  || '').toLowerCase().trim(); // "i:0#.f|membership|user@domain"
+          if (email) spUserMap[email] = id;
+          if (name.includes('|')) spUserMap[name.split('|').pop()] = id;
+        }
+        console.log('✓ SP-User-Map:', Object.keys(spUserMap).length, 'Einträge');
+      } catch(e) {
+        console.warn('SP-User-Map Fehler:', e.message);
+      }
+    }
 
     // Antraege: dynamisch oder bekannte GUID als Fallback
     listAntragId = lA?.id || KNOWN_ANTRAEGE_GUID;
@@ -811,30 +843,21 @@ function parseLizenzUsersWithIds(fields) {
   }));
 }
 
-// E-Mail → SP-User-ID via User Information List
-async function resolveSpUserId(email) {
-  if (!listUserInfoId || !email) return null;
-  try {
-    const data = await gGet(
-      `/sites/${siteId}/lists/${listUserInfoId}/items?$select=id&$expand=fields($select=EMail)` +
-      `&$filter=fields/EMail eq '${email}'&$top=1`
-    );
-    const item = (data.value || [])[0];
-    return item ? parseInt(item.id) : null;
-  } catch(e) {
-    console.warn('SP-User-ID nicht aufgelöst für', email, ':', e.message);
-    return null;
-  }
+// E-Mail → SP-LookupId (aus vorgeladener Map)
+function resolveSpUserId(email) {
+  if (!email) return null;
+  return spUserMap[email.toLowerCase().trim()] ?? null;
 }
 
 // [{name,email,spId}] → [{LookupId: N}] (für Graph PATCH)
-async function buildLookupIds(users) {
+function buildLookupIds(users) {
   const result = [];
   for (const u of users) {
-    let id = u.spId;
-    if (!id && u.email) id = await resolveSpUserId(u.email);
+    const id = u.spId || resolveSpUserId(u.email);
     if (id) result.push({ LookupId: id });
-    else    console.warn('Kein SP-LookupId für:', u.name || u.email);
+    else    console.warn('Kein SP-LookupId für:', u.name || u.email,
+                         '| Map-Größe:', Object.keys(spUserMap).length,
+                         '| Email:', u.email || '(leer)');
   }
   return result;
 }
@@ -1082,7 +1105,7 @@ async function saveLizenz() {
   // Personenfeld: LookupIds auflösen und als [{LookupId: N}]-Array schreiben
   // Graph erwartet den Feldnamen mit 'Id'-Suffix für Lookup/Person-Felder
   if (lizenzUsers.length > 0) {
-    const lookupIds = await buildLookupIds(lizenzUsers);
+    const lookupIds = buildLookupIds(lizenzUsers);
     if (lookupIds.length > 0) {
       detailFields[COL.nutzer + 'Id'] = lookupIds;
       console.log('SP-User LookupIds:', JSON.stringify(lookupIds));
