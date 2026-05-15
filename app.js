@@ -1349,23 +1349,25 @@ async function saveLizenz() {
   if (colOk(COL.kiSystem)) detailFields[COL.kiSystem] = kiSysVal;
 
   // Personenfeld: LookupIds auflösen.
-  // Graph erwartet: {FieldId@odata.type: "Collection(Edm.Int32)", FieldId: [42, 43, …]}
-  // (SP-REST nutzt [{LookupId: N}] – das ist hier falsch!)
-  const nutzerIdKey      = COL.nutzer + 'Id';
-  const nutzerOdataKey   = nutzerIdKey + '@odata.type';
+  // Graph nutzt 'LookupId'-Suffix für READ *und* WRITE (nicht 'Id' wie SP-REST!):
+  //   "KI_x002d_UserLookupId@odata.type": "Collection(Edm.Int32)"
+  //   "KI_x002d_UserLookupId": [42, 43]
+  // Das ist exakt das gleiche Muster wie im Ticketsystem (stripReadOnly).
+  const nutzerLookupKey  = COL.nutzer + 'LookupId';
+  const nutzerOdataKey   = nutzerLookupKey + '@odata.type';
   if (lizenzUsers.length > 0) {
     const lookupIds = await buildLookupIds(lizenzUsers);
     if (lookupIds.length > 0) {
-      detailFields[nutzerOdataKey] = 'Collection(Edm.Int32)';
-      detailFields[nutzerIdKey]    = lookupIds;
+      detailFields[nutzerOdataKey]  = 'Collection(Edm.Int32)';
+      detailFields[nutzerLookupKey] = lookupIds;
       console.log('SP-User LookupIds (Graph-Format):', JSON.stringify(lookupIds));
     } else {
       console.warn('Keine SP-LookupIds aufgelöst – User-Feld wird nicht gesetzt');
     }
   } else {
     // Leere Auswahl: Feld leeren
-    detailFields[nutzerOdataKey] = 'Collection(Edm.Int32)';
-    detailFields[nutzerIdKey]    = [];
+    detailFields[nutzerOdataKey]  = 'Collection(Edm.Int32)';
+    detailFields[nutzerLookupKey] = [];
   }
   if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
 
