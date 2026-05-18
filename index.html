@@ -117,6 +117,9 @@
         </div>
         <div class="toolbar">
           <input type="search" id="search-register" class="filter-search" placeholder="🔍 Suchen…" oninput="filterRegister()">
+          <select id="reg-filter-nutzer" class="filter-select" onchange="filterRegister()">
+            <option value="">Alle Nutzer</option>
+          </select>
           <select id="reg-filter-risk" class="filter-select" onchange="filterRegister()">
             <option value="">Alle Risiken</option>
             <option value="Geringes Risiko">Geringes Risiko</option>

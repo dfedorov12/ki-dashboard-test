@@ -278,7 +278,7 @@ async function gFetch(url, opts = {}) {
     console.error('Graph API error', method, res.status, JSON.stringify(errBody));
     throw Object.assign(new Error(`${res.status}: ${detail}`), { status: res.status, graphError: errBody });
   }
-  return res.status === 204 ? null : res.json();
+  return (res.status === 204 || res.status === 202) ? null : res.json();
 }
 const gGet   = url        => gFetch(url);
 const gPost  = (url, b)   => gFetch(url, { method: 'POST',   body: JSON.stringify(b) });
@@ -809,23 +809,44 @@ function openAntragPanel(itemId) {
       <button class="btn btn-primary btn-sm" onclick="submitRueckfrageAntwort(${item.id})">Antwort senden</button>
     </div>` : '';
 
+  const isDecided = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
   const gremiumSection = isGremium ? `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
-      <div class="form-group">
-        <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
-        <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(f[COL.gremiumKommentar] || '')}</textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Auflagen / Bedingungen</label>
-        <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
-      </div>
-      <div class="panel-actions">
-        <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">✓ Genehmigen</button>
-        <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
-        <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
-        <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
-      </div>
+      ${isDecided ? `
+        <div style="margin-bottom:12px">
+          ${statusBadge(f[COL.status])}
+          ${f[COL.freigabeDatum] ? `<span style="font-size:.8rem;color:#6b7280;margin-left:8px">📅 ${fmtDate(f[COL.freigabeDatum])}</span>` : ''}
+        </div>
+        ${f[COL.gremiumKommentar] ? `
+          <div style="margin-bottom:10px">
+            <div class="panel-field-label">Begründung</div>
+            <div class="panel-field-value pre" style="background:#f9fafb;padding:8px 10px;border-radius:7px;border:1px solid #e5e9ef">${esc(f[COL.gremiumKommentar])}</div>
+          </div>` : ''}
+        ${f[COL.auflagen] ? `
+          <div>
+            <div class="panel-field-label">Auflagen / Bedingungen</div>
+            <div class="panel-field-value pre" style="background:#fffbeb;padding:8px 10px;border-radius:7px;border:1px solid #fde68a">${esc(f[COL.auflagen])}</div>
+          </div>` : ''}
+        <div style="margin-top:14px">
+          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Eingereicht')" title="Entscheidung zurücksetzen">↩ Zurücksetzen</button>
+        </div>
+      ` : `
+        <div class="form-group">
+          <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
+          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(f[COL.gremiumKommentar] || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Auflagen / Bedingungen</label>
+          <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">✓ Genehmigen</button>
+          <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
+          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
+          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
+        </div>
+      `}
     </div>` : '';
 
   $id('panel-body').innerHTML = rows1 + statusSection + rueckfrageSection + gremiumSection;
@@ -1633,11 +1654,18 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
     }
 
     // Daten aus dem Antrag
-    if (af[COL.hersteller]       && regColOk('Hersteller'))         pf['Hersteller']         = af[COL.hersteller];
-    if (af[COL.komponenten]      && regColOk('Beschreibung'))        pf['Beschreibung']       = af[COL.komponenten];
-    if (af[COL.zweckUnternehmen] && regColOk('Anwendungsbereiche'))  pf['Anwendungsbereiche'] = af[COL.zweckUnternehmen];
-    if (af[COL.keyUser]          && regColOk('Schulungszielgruppe')) pf['Schulungszielgruppe']= af[COL.keyUser];
-    if (regColOk('GueltigAb'))   pf['GueltigAb'] = new Date().toISOString().slice(0, 10);
+    if (af[COL.hersteller]       && regColOk('Hersteller'))              pf['Hersteller']              = af[COL.hersteller];
+    if (af[COL.komponenten]      && regColOk('Beschreibung'))             pf['Beschreibung']            = af[COL.komponenten];
+    if (af[COL.zweckUnternehmen] && regColOk('Anwendungsbereiche'))       pf['Anwendungsbereiche']      = af[COL.zweckUnternehmen];
+    if (af[COL.keyUser]          && regColOk('Schulungszielgruppe'))      pf['Schulungszielgruppe']     = af[COL.keyUser];
+    if (af[COL.verantw]          && regColOk(COL_REG.verantw))           pf[COL_REG.verantw]           = af[COL.verantw];
+    if (af[COL.risiko]           && regColOk(COL_REG.risiko))            pf[COL_REG.risiko]            = af[COL.risiko];
+    if (af[COL.nutzungsart]      && regColOk(COL_REG.nutzungsart))       pf[COL_REG.nutzungsart]       = af[COL.nutzungsart];
+    if (af[COL.freigabeDatum]    && regColOk(COL_REG.freigabeDatum))     pf[COL_REG.freigabeDatum]     = af[COL.freigabeDatum];
+    // GueltigAb: Freigabedatum aus Antrag, sonst heute
+    if (regColOk('GueltigAb'))   pf['GueltigAb'] = af[COL.freigabeDatum]
+      ? String(af[COL.freigabeDatum]).slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
     if (regColOk('NaechstePruefung')) {
       const naechste = new Date();
       naechste.setFullYear(naechste.getFullYear() + 1);
@@ -1718,12 +1746,30 @@ async function loadRegister() {
 function filterRegister() { renderRegister(); }
 
 function renderRegister() {
-  const riskF   = $id('reg-filter-risk')?.value   || '';
-  const searchF = ($id('search-register')?.value || '').toLowerCase().trim();
+  const riskF   = $id('reg-filter-risk')?.value    || '';
+  const nutzerF = $id('reg-filter-nutzer')?.value  || '';
+  const searchF = ($id('search-register')?.value   || '').toLowerCase().trim();
+
+  // Nutzer-Dropdown dynamisch aus den vorhandenen KeyUser-Einträgen befüllen
+  const nutzerDrop = $id('reg-filter-nutzer');
+  if (nutzerDrop) {
+    const allNutzer = new Set();
+    allRegister.forEach(i => {
+      const ku = i.fields?.['KeyUser'] || '';
+      ku.split(/[,;]/).map(s => s.trim()).filter(Boolean).forEach(n => allNutzer.add(n));
+    });
+    const currentVal = nutzerDrop.value;
+    nutzerDrop.innerHTML = '<option value="">Alle Nutzer</option>' +
+      [...allNutzer].sort().map(n => `<option value="${esc(n)}"${n === currentVal ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  }
 
   let items = allRegister.filter(i => {
     const f = i.fields;
     if (riskF && f[COL_REG.risiko] !== riskF) return false;
+    if (nutzerF) {
+      const ku = (f['KeyUser'] || '').split(/[,;]/).map(s => s.trim());
+      if (!ku.includes(nutzerF)) return false;
+    }
     if (searchF) {
       const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], f['KeyUser']].join(' ').toLowerCase();
       if (!hay.includes(searchF)) return false;
