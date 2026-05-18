@@ -117,7 +117,7 @@ let msalInstance, account;
 let siteId, listAntragId, listLizenzId, listRegisterId;
 let isGremium = false;
 let allAntraege = [], allLizenzen = [], allRegister = [];
-let currentView = 'antrag';
+let currentView = 'antraege';
 let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
@@ -445,6 +445,9 @@ async function boot() {
 
     renderAntragForm();
 
+    // Standardansicht: Anträge; bei Deep-Link (?antrag=ID) direkt laden
+    await switchView('antraege');
+
     // SP-User-Map: Stufe 2 – aus Author/Editor vorhandener Items befüllen
     // (funktioniert auch wenn UserInfo-Liste nicht erreichbar war)
     try {
@@ -618,7 +621,8 @@ async function submitAntrag(e) {
     const _st = loadSettings();
     const _gen = _st.genehmiger || [];
     if (_st.benachrichtigung?.beiEinreichung !== false && _gen.length) {
-      const sender = account?.name || account?.username || 'Antragsteller';
+      const sender  = account?.name || account?.username || 'Antragsteller';
+      const deepUrl = `${location.origin}${location.pathname}?antrag=${newItem.id}`;
       sendMail(
         _gen.map(g => ({ address: g.email, name: g.name })),
         `[KI-Antrag] ${titleVal} – Prüfung erforderlich`,
@@ -629,7 +633,8 @@ async function submitAntrag(e) {
             ['Antragsteller',  sender],
             ['Eingereicht am', new Date().toLocaleDateString('de-DE')],
           ],
-          '🔍 Antrag im Dashboard prüfen'
+          '🔍 Antrag direkt öffnen',
+          deepUrl
         )
       ).then(() => showToast('📧 Genehmiger wurden automatisch benachrichtigt.'))
        .catch(e => {
@@ -684,6 +689,17 @@ async function loadAntraege() {
     _cacheTs.antraege = Date.now();
     renderAntraege();
     updateOpenBadge();
+
+    // Deep-Link: ?antrag=ID → Antrag-Panel direkt öffnen
+    const deepId = new URLSearchParams(location.search).get('antrag');
+    if (deepId) {
+      const target = allAntraege.find(i => String(i.id) === String(deepId));
+      if (target) {
+        openAntragPanel(target.id);
+        // URL sauber halten – ID aus der Adresszeile entfernen
+        history.replaceState({}, '', location.pathname);
+      }
+    }
   } catch(e) {
     $id('antraege-loading').textContent = 'Fehler beim Laden: ' + e.message;
     console.error('loadAntraege:', e);
@@ -1900,9 +1916,10 @@ async function sendMail(toList, subject, bodyHtml) {
 }
 
 // HTML-Template für KI-Benachrichtigungs-Mails
-function mailTemplate(title, lines, ctaLabel) {
+function mailTemplate(title, lines, ctaLabel, ctaUrl) {
+  const href = ctaUrl || (location.origin + location.pathname);
   const cta = ctaLabel
-    ? `<p style="margin:24px 0 0"><a href="${location.origin + location.pathname}"
+    ? `<p style="margin:24px 0 0"><a href="${href}"
         style="background:#1a56db;color:#fff;padding:10px 22px;border-radius:7px;text-decoration:none;font-weight:600"
         >${ctaLabel}</a></p>`
     : '';

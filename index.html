@@ -43,10 +43,10 @@
   </header>
 
   <nav class="nav-tabs">
-    <button class="nav-tab active" data-view="antrag" onclick="switchView('antrag')">
+    <button class="nav-tab" data-view="antrag" onclick="switchView('antrag')">
       📝 Neuer Antrag
     </button>
-    <button class="nav-tab" data-view="antraege" onclick="switchView('antraege')">
+    <button class="nav-tab active" data-view="antraege" onclick="switchView('antraege')">
       📋 Anträge
       <span id="badge-open" class="tab-badge hidden"></span>
     </button>
@@ -64,7 +64,7 @@
   <main class="main">
 
     <!-- VIEW: Neuer Antrag -->
-    <div id="view-antrag" class="view active">
+    <div id="view-antrag" class="view hidden">
       <div class="view-header">
         <h2>KI-Antrag einreichen</h2>
         <p class="view-desc">Antrag zur Freigabe eines KI-Systems gemäß Anlage 1 der KI-Richtlinie (CO-10-01). Das KI-Koordinierungsgremium prüft und entscheidet über die Freigabe.</p>
@@ -79,7 +79,7 @@
     </div>
 
     <!-- VIEW: Anträge -->
-    <div id="view-antraege" class="view hidden">
+    <div id="view-antraege" class="view active">
       <div class="view-header-row">
         <div>
           <h2>KI-Anträge</h2>
