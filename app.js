@@ -60,6 +60,7 @@ const COL = {
   notizen:          'Notizen',
   nutzer:           'KIUser',
   zugewieseneNutzer: null,
+  genehmiger:       null,   // Person-Mehrfachauswahl "Genehmiger" in KI_Antraege – wird in boot() aufgelöst
 };
 
 const STATUS_OPTS = ['Eingereicht', 'In Prüfung', 'Genehmigt', 'Abgelehnt', 'Rückfrage'];
@@ -335,9 +336,17 @@ async function boot() {
       (async () => {
         try {
           const colData = await gGet(`/sites/${siteId}/lists/${listAntragId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+          const antragColArr = colData.value || [];
           antragCols = new Set(
-            (colData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
+            antragColArr.filter(c => !c.readOnly && !c.hidden).map(c => c.name)
           );
+          for (const col of antragColArr) {
+            const dn = (col.displayName || '').toLowerCase().trim();
+            if (dn === 'genehmiger' || dn === 'approver' || dn === 'approvers') {
+              COL.genehmiger = col.name;
+              console.log('✓ Genehmiger-Spalte aufgelöst:', col.name);
+            }
+          }
           console.log('✓ Antraege-Spalten:', [...antragCols].sort().join(', '));
         } catch(e) {
           console.warn('Spaltenabruf fehlgeschlagen (kein Filter aktiv):', e.message);
@@ -417,7 +426,7 @@ async function boot() {
               console.log('✓ Register KI-System Spalte:', col.name);
             }
             if (dn === 'nutzer' || dn === 'benutzer' || dn === 'person' || dn === 'mitarbeiter' ||
-                dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser') {
+                dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'user' || dn === 'users') {
               COL_REG.nutzer = col.name;
               console.log('✓ Register Nutzer-Spalte:', col.name);
             }
@@ -595,6 +604,23 @@ async function submitAntrag(e) {
     // ── Schritt 2: Details + Status per PATCH setzen ─────────────────
     const patchPayload = { ...detailFields };
     if (colOk(COL.status)) patchPayload[COL.status] = 'Eingereicht';
+
+    // Genehmiger-Feld aus Einstellungen befüllen (Person-Mehrfachauswahl)
+    if (COL.genehmiger && colOk(COL.genehmiger)) {
+      try {
+        const _genList = loadSettings().genehmiger || [];
+        const genIds = [];
+        for (const g of _genList) {
+          const id = await resolveSpUserId(g.email, g.name);
+          if (id) genIds.push(id);
+        }
+        if (genIds.length) {
+          patchPayload[COL.genehmiger + 'LookupId@odata.type'] = 'Collection(Edm.Int32)';
+          patchPayload[COL.genehmiger + 'LookupId'] = genIds;
+          console.log('✓ Genehmiger-LookupIds gesetzt:', genIds);
+        }
+      } catch(eGen) { console.warn('Genehmiger-LookupId fehlgeschlagen:', eGen.message); }
+    }
 
     try {
       await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${newItem.id}/fields`,
@@ -785,6 +811,15 @@ function openAntragPanel(itemId) {
       <div class="panel-field-value${pre ? ' pre' : ''}">${value || '<span style="color:#9ca3af">–</span>'}</div>
     </div>`;
 
+  // Genehmiger-Namen aus Person-Feld auslesen
+  const genehmigerNames = (() => {
+    if (!COL.genehmiger || !f[COL.genehmiger]) return '';
+    const pf = f[COL.genehmiger];
+    if (Array.isArray(pf)) return pf.map(g => g?.LookupValue || String(g)).filter(Boolean).join(', ');
+    if (typeof pf === 'object') return pf?.LookupValue || '';
+    return String(pf);
+  })();
+
   const rows1 = `
     <div class="panel-section">
       <div class="panel-section-title">Grunddaten</div>
@@ -795,6 +830,7 @@ function openAntragPanel(itemId) {
       ${row('Risikokategorie',     riskBadge(f[COL.risiko]))}
       ${row('Geplanter Einsatz',   fmtDate(f[COL.projektplanung]))}
       ${row('Key User / Schulung', esc(f[COL.keyUser]))}
+      ${genehmigerNames ? row('Genehmiger', esc(genehmigerNames)) : ''}
     </div>
     <div class="panel-section">
       <div class="panel-section-title">KI-Beschreibung</div>
@@ -826,6 +862,16 @@ function openAntragPanel(itemId) {
     </div>` : '';
 
   const isDecided = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
+
+  // Einstimmig-Modus: Abstimmungsstand aus GremiumKommentar lesen
+  const _stPanel     = loadSettings();
+  const einstimmig   = (_stPanel.benachrichtigung?.genehmigungsmodus || 'einstimmig') === 'einstimmig';
+  const _genPanel    = _stPanel.genehmiger || [];
+  const panelApprovals = parseApprovals(f[COL.gremiumKommentar]);
+  const myEmailPanel   = (account?.username || '').toLowerCase();
+  const myApprovedAlready = panelApprovals.includes(myEmailPanel);
+  const showApprovalTracker = !isDecided && einstimmig && _genPanel.length > 1;
+
   const gremiumSection = isGremium ? `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
@@ -848,16 +894,27 @@ function openAntragPanel(itemId) {
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Eingereicht')" title="Entscheidung zurücksetzen">↩ Zurücksetzen</button>
         </div>
       ` : `
+        ${showApprovalTracker ? `
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.82rem">
+          <div style="font-weight:600;color:#15803d;margin-bottom:8px">⚖️ Einstimmig – Zustimmungsstand</div>
+          ${_genPanel.map(g => {
+            const approved = panelApprovals.includes(g.email.toLowerCase());
+            return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
+              <span style="color:${approved ? '#15803d' : '#9ca3af'};font-size:1rem">${approved ? '✓' : '○'}</span>
+              <span style="${approved ? 'color:#15803d;font-weight:500' : 'color:#6b7280'}">${esc(g.name || g.email)}</span>
+            </div>`;
+          }).join('')}
+        </div>` : ''}
         <div class="form-group">
           <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
-          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(f[COL.gremiumKommentar] || '')}</textarea>
+          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc((f[COL.gremiumKommentar] || '').replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim())}</textarea>
         </div>
         <div class="form-group">
           <label class="form-label">Auflagen / Bedingungen</label>
           <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
         </div>
         <div class="panel-actions">
-          <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">✓ Genehmigen</button>
+          <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
           <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
@@ -889,6 +946,51 @@ async function saveGremiumDecision(itemId, forceStatus) {
     newKommentar = prevKommentar
       ? `[${now}] ${kommentar}\n──\n${prevKommentar}`
       : `[${now}] ${kommentar}`;
+  }
+
+  // ── Einstimmig-Modus: Teilzustimmung verfolgen ───────────────────
+  if (status === 'Genehmigt') {
+    const _stD = loadSettings();
+    const modus = _stD.benachrichtigung?.genehmigungsmodus || 'einstimmig';
+    if (modus === 'einstimmig') {
+      const _genD = _stD.genehmiger || [];
+      if (_genD.length > 1) {
+        const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
+        const approvals  = parseApprovals(prevKomRaw);
+        const myEmailD   = (account?.username || '').toLowerCase();
+        if (!approvals.includes(myEmailD)) approvals.push(myEmailD);
+        const allApproved = _genD.every(g => approvals.includes(g.email.toLowerCase()));
+        if (!allApproved) {
+          // Noch nicht alle zugestimmt → Zwischenspeichern, Status auf 'In Prüfung' halten
+          const appToken  = `[APPROVALS:${approvals.join('|')}]`;
+          const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+          // Neuen Kommentar (aus Textarea) ebenfalls in das Log aufnehmen
+          let partialKom = cleanBase;
+          if (kommentar) {
+            partialKom = cleanBase
+              ? `[${now}] ${kommentar}\n──\n${cleanBase}`
+              : `[${now}] ${kommentar}`;
+          }
+          partialKom = partialKom ? `${appToken}\n${partialKom}` : appToken;
+          try {
+            await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`,
+              { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
+            const idx2 = allAntraege.findIndex(i => i.id == itemId);
+            if (idx2 >= 0) Object.assign(allAntraege[idx2].fields, { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
+          } catch(ePart) { console.warn('Einstimmig-PATCH fehlgeschlagen:', ePart.message); }
+          const remaining = _genD
+            .filter(g => !approvals.includes(g.email.toLowerCase()))
+            .map(g => g.name || g.email);
+          showToast(`✓ Deine Zustimmung gespeichert. Noch ausstehend: ${remaining.join(', ')}`);
+          renderAntraege();
+          updateOpenBadge();
+          closePanel();
+          return;
+        }
+        // Alle haben zugestimmt → APPROVALS-Token aus Kommentar entfernen
+        newKommentar = newKommentar.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+      }
+    }
   }
 
   const fields = { [COL.status]: status };
@@ -1688,9 +1790,21 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
       pf['NaechstePruefung'] = naechste.toISOString().slice(0, 10);
     }
 
-    // Kollegen (KI-User) als Text in KeyUser
+    // Kollegen (KI-User) als Text in KeyUser (immer, als Fallback)
     if (users.length && regColOk('KeyUser')) {
       pf['KeyUser'] = users.map(u => u.name || u.email).filter(Boolean).join(', ');
+    }
+
+    // Nutzer als Person-Feld (Einzelauswahl) schreiben – erste Person aus der Liste
+    if (users.length && COL_REG.nutzer && regColOk(COL_REG.nutzer)) {
+      try {
+        const firstUser = users[0];
+        const spId = firstUser.spId || await resolveSpUserId(firstUser.email, firstUser.name);
+        if (spId) {
+          pf[COL_REG.nutzer + 'LookupId'] = spId;   // Single-Value → plain integer (kein Collection)
+          console.log('✓ Register Nutzer Person-LookupId:', spId);
+        }
+      } catch(eNU) { console.warn('Register Nutzer LookupId fehlgeschlagen:', eNU.message); }
     }
 
     if (Object.keys(pf).length) {
@@ -1766,13 +1880,33 @@ function renderRegister() {
   const nutzerF = $id('reg-filter-nutzer')?.value  || '';
   const searchF = ($id('search-register')?.value   || '').toLowerCase().trim();
 
-  // Nutzer-Dropdown dynamisch aus den vorhandenen KeyUser-Einträgen befüllen
+  // Hilfsfunktion: Person-Feld oder KeyUser-Text → lesbarer String
+  const getNutzerText = f => {
+    if (COL_REG.nutzer && f[COL_REG.nutzer] != null) {
+      const pf = f[COL_REG.nutzer];
+      if (Array.isArray(pf)) return pf.map(p => p?.LookupValue || String(p)).filter(Boolean).join(', ');
+      if (typeof pf === 'object') return pf?.LookupValue || '';
+      return String(pf);
+    }
+    return f['KeyUser'] || '';
+  };
+
+  // Nutzer-Dropdown dynamisch befüllen (Person-Feld hat Vorrang vor KeyUser-Text)
   const nutzerDrop = $id('reg-filter-nutzer');
   if (nutzerDrop) {
     const allNutzer = new Set();
     allRegister.forEach(i => {
-      const ku = i.fields?.['KeyUser'] || '';
-      ku.split(/[,;]/).map(s => s.trim()).filter(Boolean).forEach(n => allNutzer.add(n));
+      const f = i.fields;
+      if (COL_REG.nutzer && f[COL_REG.nutzer] != null) {
+        const pf = f[COL_REG.nutzer];
+        const arr = Array.isArray(pf) ? pf : [pf];
+        arr.forEach(p => {
+          const n = p?.LookupValue || (typeof p === 'string' ? p : '');
+          if (n) allNutzer.add(n);
+        });
+      } else {
+        (f['KeyUser'] || '').split(/[,;]/).map(s => s.trim()).filter(Boolean).forEach(n => allNutzer.add(n));
+      }
     });
     const currentVal = nutzerDrop.value;
     nutzerDrop.innerHTML = '<option value="">Alle Nutzer</option>' +
@@ -1783,11 +1917,19 @@ function renderRegister() {
     const f = i.fields;
     if (riskF && f[COL_REG.risiko] !== riskF) return false;
     if (nutzerF) {
-      const ku = (f['KeyUser'] || '').split(/[,;]/).map(s => s.trim());
-      if (!ku.includes(nutzerF)) return false;
+      const nutzerText = getNutzerText(f);
+      if (COL_REG.nutzer && f[COL_REG.nutzer] != null) {
+        // Person-Feld: jeden Eintrag einzeln prüfen
+        const pf = f[COL_REG.nutzer];
+        const arr = Array.isArray(pf) ? pf : [pf];
+        if (!arr.some(p => (p?.LookupValue || String(p)) === nutzerF)) return false;
+      } else {
+        const ku = nutzerText.split(/[,;]/).map(s => s.trim());
+        if (!ku.includes(nutzerF)) return false;
+      }
     }
     if (searchF) {
-      const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], f['KeyUser']].join(' ').toLowerCase();
+      const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], getNutzerText(f)].join(' ').toLowerCase();
       if (!hay.includes(searchF)) return false;
     }
     return true;
@@ -1809,11 +1951,11 @@ function renderRegister() {
 
   const rows = items.map(i => {
     const f = i.fields;
-    const keyUser = f['KeyUser'] || '';
+    const nutzerDisp = getNutzerText(f);
     return `<tr onclick="openRegisterPanel(${i.id})" style="cursor:pointer">
       <td>
         <strong>${esc(f.Title || '–')}</strong>
-        ${keyUser ? `<div style="font-size:11px;color:#6b7280;margin-top:3px">👥 ${esc(keyUser)}</div>` : ''}
+        ${nutzerDisp ? `<div style="font-size:11px;color:#6b7280;margin-top:3px">👤 ${esc(nutzerDisp)}</div>` : ''}
       </td>
       <td>${esc(f[COL_REG.verantw] || '–')}</td>
       <td>${esc(f[COL_REG.hersteller] || f[COL_REG.anbieter] || '–')}</td>
@@ -1857,7 +1999,16 @@ function openRegisterPanel(itemId) {
       ${row('Hersteller / Anbieter', esc(f[COL_REG.hersteller] || f[COL_REG.anbieter]))}
       ${row('Nutzungsart',           esc(f[COL_REG.nutzungsart]))}
       ${row('Risikokategorie',       riskBadge(f[COL_REG.risiko]))}
-      ${f['KeyUser'] ? row('Nutzer / Key User',  esc(f['KeyUser'])) : ''}
+      ${(() => {
+        if (COL_REG.nutzer && f[COL_REG.nutzer] != null) {
+          const pf = f[COL_REG.nutzer];
+          const name = Array.isArray(pf)
+            ? pf.map(p => p?.LookupValue || String(p)).filter(Boolean).join(', ')
+            : (typeof pf === 'object' ? (pf?.LookupValue || '') : String(pf));
+          return name ? row('Nutzer', esc(name)) : '';
+        }
+        return f['KeyUser'] ? row('Nutzer / Key User', esc(f['KeyUser'])) : '';
+      })()}
       ${f['GueltigAb']          ? row('Gültig ab',        fmtDate(f['GueltigAb'])) : ''}
       ${f['NaechstePruefung']   ? row('Nächste Prüfung',  fmtDate(f['NaechstePruefung'])) : ''}
       ${f['Beschreibung']       ? row('Beschreibung',     esc(f['Beschreibung']), true) : ''}
@@ -2032,6 +2183,13 @@ function riskBadge(r) {
 // ═══════════════════════════════════════════════════════════════════
 // EINSTELLUNGEN (nur Gremium)
 // ═══════════════════════════════════════════════════════════════════
+
+// Parst die Zustimmungs-IDs aus dem [APPROVALS:email1|email2] Token im GremiumKommentar
+function parseApprovals(kommentar) {
+  const m = (kommentar || '').match(/\[APPROVALS:(.*?)\]/);
+  return m ? m[1].split('|').filter(Boolean) : [];
+}
+
 function loadSettings() {
   try { return JSON.parse(localStorage.getItem('ki_settings') || '{}'); } catch { return {}; }
 }
@@ -2075,6 +2233,17 @@ function renderEinstellungen() {
           </div>
           <button class="btn btn-primary btn-sm" onclick="addGenehmiger()" style="white-space:nowrap">+ Hinzufügen</button>
         </div>
+        <div style="margin-top:18px;padding-top:16px;border-top:1px solid #e5e9ef">
+          <div style="font-size:.82rem;font-weight:600;color:#374151;margin-bottom:10px">⚖️ Genehmigungsmodus</div>
+          <label class="settings-check">
+            <input type="radio" name="genmodus" id="modus-einstimmig" value="einstimmig" ${(ben.genehmigungsmodus || 'einstimmig') === 'einstimmig' ? 'checked' : ''}>
+            <span><strong>Einstimmig</strong> – alle Genehmiger müssen einzeln zustimmen</span>
+          </label>
+          <label class="settings-check" style="margin-top:6px">
+            <input type="radio" name="genmodus" id="modus-einer" value="einer" ${ben.genehmigungsmodus === 'einer' ? 'checked' : ''}>
+            <span><strong>Einer reicht</strong> – eine Zustimmung genügt zur Freigabe</span>
+          </label>
+        </div>
       </div>
 
       <div class="settings-card">
@@ -2107,12 +2276,14 @@ function renderEinstellungen() {
 }
 
 function saveSettings() {
-  const prev = loadSettings();
+  const prev  = loadSettings();
+  const modus = document.querySelector('input[name="genmodus"]:checked')?.value || 'einstimmig';
   const data = {
     genehmiger: prev.genehmiger || [],
     benachrichtigung: {
-      beiEinreichung:  $id('notif-einreichung')?.checked  ?? true,
-      beiEntscheidung: $id('notif-entscheidung')?.checked ?? true,
+      beiEinreichung:    $id('notif-einreichung')?.checked  ?? true,
+      beiEntscheidung:   $id('notif-entscheidung')?.checked ?? true,
+      genehmigungsmodus: modus,
     },
   };
   saveSettingsData(data);
