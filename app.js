@@ -26,7 +26,8 @@ const COL_REG = {
   anbieter:      'Anbieter',
   notizen:       'Notizen',
   kiSystem:      null,   // z.B. 'KI_x002d_System' – wird in boot() aufgelöst
-  nutzer:        null,   // Person-Spalte im Register – wird in boot() aufgelöst
+  nutzer:        null,   // Person-Feld "User/Nutzer" (Lizenznehmer) – wird in boot() aufgelöst
+  ansprechperson: null,  // Person-Feld "Ansprechperson" = Antragsteller – wird in boot() aufgelöst
 };
 
 // SP-interne Spaltennamen (sofern abweichend von Anzeigenamme anpassen)
@@ -429,6 +430,11 @@ async function boot() {
                 dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'user' || dn === 'users') {
               COL_REG.nutzer = col.name;
               console.log('✓ Register Nutzer-Spalte:', col.name);
+            }
+            if (dn === 'ansprechperson' || dn === 'ansprechpartner' || dn === 'kontakt' ||
+                dn === 'contact' || dn === 'antragsteller') {
+              COL_REG.ansprechperson = col.name;
+              console.log('✓ Register Ansprechperson-Spalte:', col.name);
             }
           }
         } catch(e) { console.warn('Register-Spalten fehlgeschlagen:', e.message); }
@@ -1013,6 +1019,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
       const _st2 = loadSettings();
       if (_st2.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
         const statusEmoji = status === 'Genehmigt' ? '✅' : status === 'Abgelehnt' ? '❌' : '❓';
+        const deepUrl = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
         const infoRows = [
           ['KI-System',     savedName],
           ['Entscheidung',  `${statusEmoji} ${status}`],
@@ -1020,7 +1027,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
           ['Datum',         new Date().toLocaleDateString('de-DE')],
         ];
         if (kommentar) infoRows.push(['Begründung', kommentar]);
-        if ($id('pg-auflagen')?.value?.trim()) infoRows.push(['Auflagen', $id('pg-auflagen').value.trim()]);
+        if (auflagen)  infoRows.push(['Auflagen / Bedingungen', auflagen]);
 
         sendMail(
           [{ address: authorEmail, name: authorName }],
@@ -1028,7 +1035,8 @@ async function saveGremiumDecision(itemId, forceStatus) {
           mailTemplate(
             `Ihr KI-Antrag wurde ${status === 'Genehmigt' ? 'genehmigt' : status === 'Abgelehnt' ? 'abgelehnt' : 'mit einer Rückfrage versehen'}`,
             infoRows,
-            status === 'Rückfrage' ? '💬 Rückfrage beantworten' : '📋 Details im Dashboard ansehen'
+            status === 'Rückfrage' ? '💬 Rückfrage beantworten' : '📋 Antrag im Dashboard anzeigen',
+            deepUrl
           )
         ).then(() => showToast(`📧 ${authorName || authorEmail} automatisch benachrichtigt.`))
          .catch(e => {
@@ -1719,11 +1727,18 @@ async function saveLizenz() {
     allLizenzen = [];
     await loadLizenzen();
 
-    // Wenn ein Entwurf vollständig ausgefüllt wurde → KI-Register-Eintrag anlegen
+    // Wenn ein Entwurf vollständig ausgefüllt wurde → KI-Register-Eintrag anlegen + sofort laden
     if (wasDraft && listRegisterId) {
-      const finalId = editLizenzId;  // editLizenzId noch gesetzt vor closModal
+      const finalId = editLizenzId;  // editLizenzId noch gesetzt vor closeModal
       await createRegisterEntries(kiSysVal, lizenzUsers, finalId);
       allRegister = [];
+      _cacheTs.register = 0;   // Cache erzwingen → nächstes Öffnen des Register-Tabs lädt neu
+      if (currentView === 'register') {
+        await loadRegister();   // Sofort aktualisieren wenn Register gerade geöffnet ist
+        showToast('✓ KI-Register automatisch aktualisiert.');
+      } else {
+        showToast('✓ KI-Register wurde automatisch aktualisiert.');
+      }
       console.log('✓ KI-Register nach Lizenzierung aktualisiert');
     }
   } catch(e) {
@@ -1795,7 +1810,7 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
       pf['KeyUser'] = users.map(u => u.name || u.email).filter(Boolean).join(', ');
     }
 
-    // Nutzer als Person-Feld (Einzelauswahl) schreiben – erste Person aus der Liste
+    // Nutzer als Person-Feld (Einzelauswahl) schreiben – erste Person aus der Lizenznehmerliste
     if (users.length && COL_REG.nutzer && regColOk(COL_REG.nutzer)) {
       try {
         const firstUser = users[0];
@@ -1805,6 +1820,19 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
           console.log('✓ Register Nutzer Person-LookupId:', spId);
         }
       } catch(eNU) { console.warn('Register Nutzer LookupId fehlgeschlagen:', eNU.message); }
+    }
+
+    // Antragsteller als Ansprechperson hinterlegen
+    if (COL_REG.ansprechperson && regColOk(COL_REG.ansprechperson)) {
+      try {
+        const authorId = af.Author0LookupId
+          ? parseInt(af.Author0LookupId)
+          : await resolveSpUserId(af.Author0EMail || '', af.Author0LookupValue || '');
+        if (authorId) {
+          pf[COL_REG.ansprechperson + 'LookupId'] = authorId;
+          console.log('✓ Register Ansprechperson (Antragsteller) LookupId:', authorId);
+        }
+      } catch(eAsp) { console.warn('Register Ansprechperson LookupId fehlgeschlagen:', eAsp.message); }
     }
 
     if (Object.keys(pf).length) {
@@ -1880,16 +1908,18 @@ function renderRegister() {
   const nutzerF = $id('reg-filter-nutzer')?.value  || '';
   const searchF = ($id('search-register')?.value   || '').toLowerCase().trim();
 
-  // Hilfsfunktion: Person-Feld oder KeyUser-Text → lesbarer String
-  const getNutzerText = f => {
-    if (COL_REG.nutzer && f[COL_REG.nutzer] != null) {
-      const pf = f[COL_REG.nutzer];
+  // Hilfsfunktion: Person-Feld → lesbarer String (generisch für Nutzer und Ansprechperson)
+  const getPersonText = (f, colKey, fallbackKey) => {
+    if (colKey && f[colKey] != null) {
+      const pf = f[colKey];
       if (Array.isArray(pf)) return pf.map(p => p?.LookupValue || String(p)).filter(Boolean).join(', ');
       if (typeof pf === 'object') return pf?.LookupValue || '';
       return String(pf);
     }
-    return f['KeyUser'] || '';
+    return fallbackKey ? (f[fallbackKey] || '') : '';
   };
+  const getNutzerText      = f => getPersonText(f, COL_REG.nutzer, 'KeyUser');
+  const getAnsprechperson  = f => getPersonText(f, COL_REG.ansprechperson, null);
 
   // Nutzer-Dropdown dynamisch befüllen (Person-Feld hat Vorrang vor KeyUser-Text)
   const nutzerDrop = $id('reg-filter-nutzer');
@@ -1929,7 +1959,7 @@ function renderRegister() {
       }
     }
     if (searchF) {
-      const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], getNutzerText(f)].join(' ').toLowerCase();
+      const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], getNutzerText(f), getAnsprechperson(f)].join(' ').toLowerCase();
       if (!hay.includes(searchF)) return false;
     }
     return true;
@@ -1951,11 +1981,13 @@ function renderRegister() {
 
   const rows = items.map(i => {
     const f = i.fields;
-    const nutzerDisp = getNutzerText(f);
+    const nutzerDisp     = getNutzerText(f);
+    const ansprechDisp   = getAnsprechperson(f);
     return `<tr onclick="openRegisterPanel(${i.id})" style="cursor:pointer">
       <td>
         <strong>${esc(f.Title || '–')}</strong>
-        ${nutzerDisp ? `<div style="font-size:11px;color:#6b7280;margin-top:3px">👤 ${esc(nutzerDisp)}</div>` : ''}
+        ${nutzerDisp ? `<div style="font-size:11px;color:#6b7280;margin-top:2px">👤 ${esc(nutzerDisp)}</div>` : ''}
+        ${ansprechDisp ? `<div style="font-size:11px;color:#9ca3af;margin-top:1px">✉ ${esc(ansprechDisp)}</div>` : ''}
       </td>
       <td>${esc(f[COL_REG.verantw] || '–')}</td>
       <td>${esc(f[COL_REG.hersteller] || f[COL_REG.anbieter] || '–')}</td>
@@ -2005,9 +2037,19 @@ function openRegisterPanel(itemId) {
           const name = Array.isArray(pf)
             ? pf.map(p => p?.LookupValue || String(p)).filter(Boolean).join(', ')
             : (typeof pf === 'object' ? (pf?.LookupValue || '') : String(pf));
-          return name ? row('Nutzer', esc(name)) : '';
+          return name ? row('Nutzer (Lizenznehmer)', esc(name)) : '';
         }
         return f['KeyUser'] ? row('Nutzer / Key User', esc(f['KeyUser'])) : '';
+      })()}
+      ${(() => {
+        if (COL_REG.ansprechperson && f[COL_REG.ansprechperson] != null) {
+          const pf = f[COL_REG.ansprechperson];
+          const name = Array.isArray(pf)
+            ? pf.map(p => p?.LookupValue || String(p)).filter(Boolean).join(', ')
+            : (typeof pf === 'object' ? (pf?.LookupValue || '') : String(pf));
+          return name ? row('Ansprechperson', esc(name)) : '';
+        }
+        return '';
       })()}
       ${f['GueltigAb']          ? row('Gültig ab',        fmtDate(f['GueltigAb'])) : ''}
       ${f['NaechstePruefung']   ? row('Nächste Prüfung',  fmtDate(f['NaechstePruefung'])) : ''}
