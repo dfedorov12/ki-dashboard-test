@@ -137,6 +137,7 @@ const SCOPES = [
   'User.Read',
   'People.Read',
   'User.ReadBasic.All',  // für /users?$filter=startswith(...) Personensuche
+  'Mail.Send',           // E-Mails direkt über Graph senden
 ];
 
 async function initAuth() {
@@ -613,20 +614,28 @@ async function submitAntrag(e) {
     const s = $id('antrag-success');
     s.innerHTML = `✓ Ihr Antrag <strong>${esc(titleVal)}</strong> wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen.`;
 
-    // Genehmiger per mailto benachrichtigen (wenn konfiguriert)
+    // Genehmiger automatisch per Graph-Mail benachrichtigen (wenn konfiguriert)
     const _st = loadSettings();
     const _gen = _st.genehmiger || [];
     if (_st.benachrichtigung?.beiEinreichung !== false && _gen.length) {
-      const to  = _gen.map(g => g.email).join(';');
-      const sub = encodeURIComponent(`[KI-Antrag] ${titleVal} – Prüfung erforderlich`);
-      const bod = encodeURIComponent(
-        `Sehr geehrte Damen und Herren,\n\nes liegt ein neuer KI-Antrag zur Prüfung vor:\n\n` +
-        `Bezeichnung: ${titleVal}\nAntragsteller: ${account?.name || account?.username || ''}\n\n` +
-        `Bitte im KI-Dashboard prüfen:\n${location.origin + location.pathname}\n\nMit freundlichen Grüßen`
-      );
-      s.innerHTML += `<div style="margin-top:12px">
-        <a href="mailto:${esc(to)}?subject=${sub}&body=${bod}" class="btn btn-outline btn-sm">📧 Genehmiger informieren</a>
-      </div>`;
+      const sender = account?.name || account?.username || 'Antragsteller';
+      sendMail(
+        _gen.map(g => ({ address: g.email, name: g.name })),
+        `[KI-Antrag] ${titleVal} – Prüfung erforderlich`,
+        mailTemplate(
+          'Neuer KI-Antrag zur Prüfung eingegangen',
+          [
+            ['Bezeichnung',    titleVal],
+            ['Antragsteller',  sender],
+            ['Eingereicht am', new Date().toLocaleDateString('de-DE')],
+          ],
+          '🔍 Antrag im Dashboard prüfen'
+        )
+      ).then(() => showToast('📧 Genehmiger wurden automatisch benachrichtigt.'))
+       .catch(e => {
+         console.warn('Mail an Genehmiger fehlgeschlagen:', e.message);
+         showToast('Antrag eingereicht – E-Mail-Benachrichtigung fehlgeschlagen (' + e.message + ')', 'error', 7000);
+       });
     }
     s.classList.remove('hidden');
     allAntraege = [];
@@ -858,36 +867,35 @@ async function saveGremiumDecision(itemId, forceStatus) {
     const savedName   = antragAfter?.fields?.Title || '';
     showToast(`✓ Entscheidung „${status}" gespeichert${savedName ? ' für ' + savedName : ''}.`);
 
-    // Antragsteller per mailto benachrichtigen (wenn konfiguriert + final-Entscheidung)
+    // Antragsteller automatisch per Graph-Mail benachrichtigen (wenn konfiguriert + Statusentscheidung)
     if ((status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage') && antragAfter) {
       const authorEmail = antragAfter.fields?.Author0EMail || '';
+      const authorName  = antragAfter.fields?.Author0LookupValue || authorEmail;
       const _st2 = loadSettings();
       if (_st2.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
-        const sub2 = encodeURIComponent(`[KI-Antrag] ${savedName} – ${status}`);
-        const bod2 = encodeURIComponent(
-          `Sehr geehrte/r Antragsteller/in,\n\nIhr KI-Antrag „${savedName}" wurde vom Gremium bearbeitet:\n\n` +
-          `Entscheidung: ${status}\n${kommentar ? 'Kommentar: ' + kommentar + '\n' : ''}` +
-          `\nBitte im KI-Dashboard einsehen:\n${location.origin + location.pathname}\n\n` +
-          `Mit freundlichen Grüßen\nKI-Koordinierungsgremium DIHAG`
-        );
-        showToast(
-          `📧 <a href="mailto:${esc(authorEmail)}?subject=${sub2}&body=${bod2}" style="color:#fff;text-decoration:underline">Antragsteller benachrichtigen</a>`,
-          'info', 10000
-        );
-      }
-      // Power Automate Flow anrufen (wenn URL hinterlegt)
-      const paUrl = _st2.paUrl || '';
-      if (paUrl) {
-        fetch(paUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            antragId: itemId, systemName: savedName, status, kommentar,
-            antragsteller: authorEmail,
-            entscheider: account?.name || account?.username || '',
-            timestamp: new Date().toISOString()
-          })
-        }).catch(e => console.warn('Power Automate Flow fehlgeschlagen:', e.message));
+        const statusEmoji = status === 'Genehmigt' ? '✅' : status === 'Abgelehnt' ? '❌' : '❓';
+        const infoRows = [
+          ['KI-System',     savedName],
+          ['Entscheidung',  `${statusEmoji} ${status}`],
+          ['Entscheider',   account?.name || account?.username || ''],
+          ['Datum',         new Date().toLocaleDateString('de-DE')],
+        ];
+        if (kommentar) infoRows.push(['Begründung', kommentar]);
+        if ($id('pg-auflagen')?.value?.trim()) infoRows.push(['Auflagen', $id('pg-auflagen').value.trim()]);
+
+        sendMail(
+          [{ address: authorEmail, name: authorName }],
+          `[KI-Antrag] ${savedName} – ${status}`,
+          mailTemplate(
+            `Ihr KI-Antrag wurde ${status === 'Genehmigt' ? 'genehmigt' : status === 'Abgelehnt' ? 'abgelehnt' : 'mit einer Rückfrage versehen'}`,
+            infoRows,
+            status === 'Rückfrage' ? '💬 Rückfrage beantworten' : '📋 Details im Dashboard ansehen'
+          )
+        ).then(() => showToast(`📧 ${authorName || authorEmail} automatisch benachrichtigt.`))
+         .catch(e => {
+           console.warn('Mail an Antragsteller fehlgeschlagen:', e.message);
+           showToast('Entscheidung gespeichert – E-Mail fehlgeschlagen: ' + e.message, 'error', 7000);
+         });
       }
     }
 
@@ -1822,6 +1830,57 @@ function closeModal(e) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// E-MAIL VIA GRAPH (Mail.Send)
+// ═══════════════════════════════════════════════════════════════════
+// toList: [{address, name}] oder ['email@...'] oder 'email@...'
+async function sendMail(toList, subject, bodyHtml) {
+  const toArr = (Array.isArray(toList) ? toList : [toList]).map(r =>
+    typeof r === 'string'
+      ? { emailAddress: { address: r } }
+      : { emailAddress: { address: r.address || r.email || '', name: r.name || '' } }
+  ).filter(r => r.emailAddress.address);
+
+  if (!toArr.length) { console.warn('sendMail: keine Empfänger'); return; }
+
+  await gPost('/me/sendMail', {
+    message: {
+      subject,
+      body: { contentType: 'HTML', content: bodyHtml },
+      toRecipients: toArr,
+    },
+    saveToSentItems: true,
+  });
+  console.log('✓ E-Mail gesendet:', subject, '→', toArr.map(r => r.emailAddress.address).join(', '));
+}
+
+// HTML-Template für KI-Benachrichtigungs-Mails
+function mailTemplate(title, lines, ctaLabel) {
+  const cta = ctaLabel
+    ? `<p style="margin:24px 0 0"><a href="${location.origin + location.pathname}"
+        style="background:#1a56db;color:#fff;padding:10px 22px;border-radius:7px;text-decoration:none;font-weight:600"
+        >${ctaLabel}</a></p>`
+    : '';
+  const rows = lines.map(([k, v]) =>
+    `<tr><td style="padding:5px 0;color:#6b7280;font-size:13px;width:160px">${k}</td>
+         <td style="padding:5px 0;font-size:13px;font-weight:500">${v}</td></tr>`
+  ).join('');
+  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:24px">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e9ef">
+    <div style="background:linear-gradient(135deg,#1648c5,#1a56db);padding:20px 28px">
+      <div style="color:#fff;font-size:18px;font-weight:700">🤖 KI-Dashboard · DIHAG Gruppe</div>
+    </div>
+    <div style="padding:24px 28px">
+      <h2 style="margin:0 0 18px;font-size:16px;color:#1e2939">${title}</h2>
+      <table style="border-collapse:collapse;width:100%">${rows}</table>
+      ${cta}
+    </div>
+    <div style="background:#f9fafb;padding:12px 28px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e9ef">
+      Diese Nachricht wurde automatisch vom KI-Dashboard generiert.
+    </div>
+  </div></body></html>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // TOAST NOTIFICATIONS
 // ═══════════════════════════════════════════════════════════════════
 function showToast(msg, type = 'success', duration = 4000) {
@@ -1958,21 +2017,22 @@ function renderEinstellungen() {
       <div class="settings-card">
         <div class="settings-card-title">📧 E-Mail-Benachrichtigungen</div>
         <p style="font-size:.82rem;color:#6b7280;margin-bottom:14px;line-height:1.5">
-          Das Dashboard öffnet einen vorausgefüllten E-Mail-Entwurf in Ihrem E-Mail-Programm. Versand erfolgt durch Sie manuell.
+          E-Mails werden <strong>vollautomatisch</strong> über Microsoft Graph (Ihr Konto) versendet –
+          kein E-Mail-Programm nötig. Voraussetzung: App-Berechtigung <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px">Mail.Send</code>
+          in der Azure AD App-Registrierung.
         </p>
         <label class="settings-check">
           <input type="checkbox" id="notif-einreichung" ${ben.beiEinreichung !== false ? 'checked' : ''}>
-          <span>Bei neuem Antrag → Genehmiger-Entwurf anzeigen</span>
+          <span>Bei neuem Antrag → alle Genehmiger automatisch benachrichtigen</span>
         </label>
         <label class="settings-check">
           <input type="checkbox" id="notif-entscheidung" ${ben.beiEntscheidung !== false ? 'checked' : ''}>
-          <span>Nach Gremium-Entscheidung → Antragsteller-Entwurf anzeigen</span>
+          <span>Nach Gremium-Entscheidung → Antragsteller automatisch benachrichtigen</span>
         </label>
-        <div style="margin-top:20px">
-          <label class="form-label">Power Automate Flow-URL <span style="font-weight:400;color:#9ca3af">(optional)</span></label>
-          <input id="pa-url" type="url" class="form-control" value="${esc(settings.paUrl || '')}"
-            placeholder="https://prod.westeurope.logic.azure.com/workflows/…">
-          <div class="form-hint">Wenn hinterlegt, sendet das Dashboard bei jeder Entscheidung einen HTTP POST an diesen Flow (für vollautomatische E-Mails).</div>
+        <div style="margin-top:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;font-size:.8rem;color:#1d4ed8;line-height:1.5">
+          💡 <strong>Hinweis IT-Admin:</strong> In der Azure AD App-Registrierung muss unter
+          „API-Berechtigungen" → Microsoft Graph → <strong>Mail.Send</strong> (delegiert) hinzugefügt
+          und vom Admin genehmigt werden.
         </div>
       </div>
 
@@ -1991,7 +2051,6 @@ function saveSettings() {
       beiEinreichung:  $id('notif-einreichung')?.checked  ?? true,
       beiEntscheidung: $id('notif-entscheidung')?.checked ?? true,
     },
-    paUrl: $id('pa-url')?.value.trim() || ''
   };
   saveSettingsData(data);
   showToast('Einstellungen gespeichert.');
