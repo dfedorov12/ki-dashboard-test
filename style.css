@@ -344,3 +344,32 @@ tbody td { padding: 10px 14px; color: #1e2939; vertical-align: middle; }
 }
 .people-item:last-child { border-bottom: none; }
 .people-item-hover, .people-item:hover { background: #f0f4ff; }
+
+/* ─── TOAST ─────────────────────────────────────────────────────── */
+#toast-container {
+  position: fixed; bottom: 24px; right: 24px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 9999; pointer-events: none;
+}
+.toast {
+  background: #1e2939; color: #fff;
+  padding: 12px 18px; border-radius: 9px;
+  font-size: .875rem; font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .25s, transform .25s;
+  max-width: 360px; line-height: 1.4;
+}
+.toast.toast-show { opacity: 1; transform: translateY(0); }
+.toast.toast-success { background: #15803d; }
+.toast.toast-error   { background: #dc2626; }
+.toast.toast-info    { background: #1a56db; }
+
+/* ─── FILTER SEARCH ──────────────────────────────────────────────── */
+.filter-search {
+  padding: 6px 10px; border: 1.5px solid #e5e9ef;
+  border-radius: 7px; font-family: inherit; font-size: .8rem;
+  color: #374151; background: #fff; width: 180px;
+  transition: border-color .15s;
+}
+.filter-search:focus { outline: none; border-color: #1a56db; }

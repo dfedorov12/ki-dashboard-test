@@ -59,6 +59,7 @@ const COL = {
   verantwIT:        'VerantwortlicherIT',
   notizen:          'Notizen',
   nutzer:           'KIUser',
+  zugewieseneNutzer: null,
 };
 
 const STATUS_OPTS = ['Eingereicht', 'In Prüfung', 'Genehmigt', 'Abgelehnt', 'Rückfrage'];
@@ -81,7 +82,7 @@ const ANTRAG_FIELDS = [
   { section: 'Klassifizierung' },
   { key: COL.risiko,                     label: 'Risikokategorie',                   type: 'choice',  req: true,
     choices: ['', 'Geringes Risiko', 'Normales Risiko', 'Hohes Risiko', 'Verboten'],
-    hint: 'Eigene Einschätzung zu Sicherheit, Datenschutz und Grundrechten' },
+    hint: 'Eigene Einschätzung gemäß EU AI Act. „Verboten" = Systeme nach Art. 5 EU AI Act (z.B. Social Scoring, manipulative KI, biometrische Massenüberwachung in der Öffentlichkeit).' },
   { key: COL.nutzungsart,                label: 'Nutzungsart',                       type: 'choice',  req: true,
     choices: ['', 'Intern', 'Extern', 'Intern & Extern'],
     hint: 'Nur intern oder auch als Angebot für Dritte/Vermarktung?' },
@@ -125,6 +126,8 @@ let spUserMap    = {};   // email.toLowerCase()/name → SP-LookupId (Integer)
 let antragCols   = null;
 let registerCols = null;
 let lizenzCols  = null;  // analog für KI_Lizenzen
+let _cacheTs = { antraege: 0, lizenzen: 0, register: 0 };
+const CACHE_TTL = 5 * 60 * 1000;  // 5 Minuten
 
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
@@ -318,103 +321,109 @@ async function boot() {
     const lL  = findList(LIST_LIZENZEN);
     const lR  = findList(LIST_REGISTER);
 
-    // Antraege: dynamisch oder bekannte GUID als Fallback
-    listAntragId = lA?.id || KNOWN_ANTRAEGE_GUID;
+    // Set IDs upfront before parallel tasks
+    listAntragId  = lA?.id || KNOWN_ANTRAEGE_GUID;
     if (lA) console.log('✓ KI_Antraege:', lA.displayName, listAntragId);
     else    console.log('⚠ KI_Antraege nicht via Listen-API gefunden → Fallback-GUID:', listAntragId);
+    if (lL) listLizenzId   = lL.id;
+    if (lR) listRegisterId = lR.id;
 
-    // Tatsächliche schreibbare Spaltennamen der Antraege-Liste abrufen
-    // → verhindert 500-Fehler bei ungültigen Feldnamen
-    try {
-      const colData = await gGet(`/sites/${siteId}/lists/${listAntragId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
-      antragCols = new Set(
-        (colData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
-      );
-      console.log('✓ Antraege-Spalten:', [...antragCols].sort().join(', '));
-    } catch(e) {
-      console.warn('Spaltenabruf fehlgeschlagen (kein Filter aktiv):', e.message);
-    }
-
-    // Lizenzen: nur wenn gefunden
-    if (lL) {
-      listLizenzId = lL.id;
-      console.log('✓ KI_Lizenzen:', lL.displayName, listLizenzId);
-      try {
-        await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
-        isGremium = true;
-        console.log('✓ Gremium-Zugriff bestätigt');
-
-        // Echte interne Spaltennamen + gültige Schreibspalten der Lizenzen-Liste ermitteln
-        // (SharePoint-intern kann 'System' z.B. 'System0' heißen)
+    // Parallel: Spalten-Discovery für alle drei Listen
+    await Promise.all([
+      // ── Antraege-Spalten ──────────────────────────────────────────
+      (async () => {
         try {
-          const lizColData = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
-          lizenzCols = new Set(
-            (lizColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
+          const colData = await gGet(`/sites/${siteId}/lists/${listAntragId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+          antragCols = new Set(
+            (colData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
           );
-          console.log('✓ Lizenzen-Spalten:', [...lizenzCols].sort().join(', '));
-          // Alle Spalten loggen für Diagnose
-          console.log('Lizenzen-Spalten (alle):', (lizColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
+          console.log('✓ Antraege-Spalten:', [...antragCols].sort().join(', '));
+        } catch(e) {
+          console.warn('Spaltenabruf fehlgeschlagen (kein Filter aktiv):', e.message);
+        }
+      })(),
 
-          for (const col of (lizColData.value || [])) {
+      // ── Lizenzen: Zugriff prüfen + Spalten-Discovery ──────────────
+      (async () => {
+        if (!lL) {
+          console.warn('⚠ KI_Lizenzen nicht gefunden. Verfügbare Listen:',
+            allLists.map(l => `${l.name}/${l.displayName}`).join(' | '));
+          return;
+        }
+        console.log('✓ KI_Lizenzen:', lL.displayName, listLizenzId);
+        try {
+          await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
+          isGremium = true;
+          console.log('✓ Gremium-Zugriff bestätigt');
+
+          try {
+            const lizColData = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+            lizenzCols = new Set(
+              (lizColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
+            );
+            console.log('✓ Lizenzen-Spalten:', [...lizenzCols].sort().join(', '));
+            console.log('Lizenzen-Spalten (alle):', (lizColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
+
+            for (const col of (lizColData.value || [])) {
+              const dn = (col.displayName || '').toLowerCase().trim();
+              if (dn === 'system' || dn === 'ki-system' || dn === 'kisystem') {
+                const oldKey = COL.kiSystem;
+                COL.kiSystem = col.name;
+                const lf = LIZENZ_FIELDS.find(f => f.key === oldKey);
+                if (lf) lf.key = col.name;
+                console.log('✓ KI-System Spalte aufgelöst:', oldKey, '→', col.name);
+              }
+              if (dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'ki_user') {
+                COL.nutzer = col.name;
+                console.log('✓ KI-User Spalte aufgelöst:', col.name);
+              }
+              if (dn === 'notizen' || dn === 'notes' || dn === 'bemerkungen') {
+                const oldNot = COL.notizen;
+                COL.notizen = col.name;
+                const lf = LIZENZ_FIELDS.find(f => f.key === oldNot);
+                if (lf) lf.key = col.name;
+                console.log('✓ Notizen Spalte aufgelöst:', oldNot, '→', col.name);
+              }
+              if (dn === 'zugewiesene nutzer' || dn === 'zugewiesene_nutzer' || dn === 'zugewiesenenutzer') {
+                COL.zugewieseneNutzer = col.name;
+                console.log('✓ ZugewieseneNutzer Spalte aufgelöst:', col.name);
+              }
+            }
+          } catch(eCols) {
+            console.warn('Lizenzen Spalten-Lookup fehlgeschlagen:', eCols.message);
+          }
+        } catch(e) {
+          if (e.status !== 403) console.warn('Lizenzen Lesezugriff:', e.message);
+          else console.log('ℹ Kein Gremium-Zugriff auf Lizenzen (403)');
+        }
+      })(),
+
+      // ── Register-Spalten-Discovery ────────────────────────────────
+      (async () => {
+        if (!lR) {
+          console.warn('⚠ KI_Register nicht gefunden');
+          return;
+        }
+        console.log('✓ KI_Register:', lR.displayName, listRegisterId);
+        try {
+          const regColData = await gGet(`/sites/${siteId}/lists/${listRegisterId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
+          registerCols = new Set((regColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name));
+          console.log('Register-Spalten (alle):', (regColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
+          for (const col of (regColData.value || [])) {
             const dn = (col.displayName || '').toLowerCase().trim();
-            // KI-System: Anzeigename 'System' (oder Varianten)
-            if (dn === 'system' || dn === 'ki-system' || dn === 'kisystem') {
-              const oldKey = COL.kiSystem;
-              COL.kiSystem = col.name;
-              const lf = LIZENZ_FIELDS.find(f => f.key === oldKey);
-              if (lf) lf.key = col.name;
-              console.log('✓ KI-System Spalte aufgelöst:', oldKey, '→', col.name);
+            if (dn === 'ki-system' || dn === 'ki system' || dn === 'kisystem' || dn === 'system') {
+              COL_REG.kiSystem = col.name;
+              console.log('✓ Register KI-System Spalte:', col.name);
             }
-            // KI-User: Anzeigename 'KI-User', 'KI User', 'KIUser', 'User' o.ä.
-            if (dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'ki_user') {
-              COL.nutzer = col.name;
-              console.log('✓ KI-User Spalte aufgelöst:', col.name);
-            }
-            // Notizen: Anzeigename 'Notizen', 'Notes', 'Bemerkungen' o.ä.
-            if (dn === 'notizen' || dn === 'notes' || dn === 'bemerkungen') {
-              const oldNot = COL.notizen;
-              COL.notizen = col.name;
-              const lf = LIZENZ_FIELDS.find(f => f.key === oldNot);
-              if (lf) lf.key = col.name;
-              console.log('✓ Notizen Spalte aufgelöst:', oldNot, '→', col.name);
+            if (dn === 'nutzer' || dn === 'benutzer' || dn === 'person' || dn === 'mitarbeiter' ||
+                dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser') {
+              COL_REG.nutzer = col.name;
+              console.log('✓ Register Nutzer-Spalte:', col.name);
             }
           }
-        } catch(eCols) {
-          console.warn('Lizenzen Spalten-Lookup fehlgeschlagen:', eCols.message);
-        }
-      } catch(e) {
-        if (e.status !== 403) console.warn('Lizenzen Lesezugriff:', e.message);
-        else console.log('ℹ Kein Gremium-Zugriff auf Lizenzen (403)');
-      }
-    } else {
-      console.warn('⚠ KI_Lizenzen nicht gefunden. Verfügbare Listen:',
-        allLists.map(l => `${l.name}/${l.displayName}`).join(' | '));
-    }
-
-    // Register + Spalten-Discovery
-    if (lR) {
-      listRegisterId = lR.id;
-      console.log('✓ KI_Register:', lR.displayName, listRegisterId);
-      try {
-        const regColData = await gGet(`/sites/${siteId}/lists/${listRegisterId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
-        registerCols = new Set((regColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name));
-        console.log('Register-Spalten (alle):', (regColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
-        for (const col of (regColData.value || [])) {
-          const dn = (col.displayName || '').toLowerCase().trim();
-          if (dn === 'ki-system' || dn === 'ki system' || dn === 'kisystem' || dn === 'system') {
-            COL_REG.kiSystem = col.name;
-            console.log('✓ Register KI-System Spalte:', col.name);
-          }
-          if (dn === 'nutzer' || dn === 'benutzer' || dn === 'person' || dn === 'mitarbeiter' ||
-              dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser') {
-            COL_REG.nutzer = col.name;
-            console.log('✓ Register Nutzer-Spalte:', col.name);
-          }
-        }
-      } catch(e) { console.warn('Register-Spalten fehlgeschlagen:', e.message); }
-    } else {
-      console.warn('⚠ KI_Register nicht gefunden');
-    }
+        } catch(e) { console.warn('Register-Spalten fehlgeschlagen:', e.message); }
+      })(),
+    ]);
 
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
@@ -474,9 +483,9 @@ async function switchView(view) {
   if (activeView) { activeView.classList.remove('hidden'); activeView.classList.add('active'); }
   document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
 
-  if (view === 'antraege' && !allAntraege.length)  await loadAntraege();
-  if (view === 'lizenzen' && !allLizenzen.length)  await loadLizenzen();
-  if (view === 'register' && !allRegister.length)  await loadRegister();
+  if (view === 'antraege' && (Date.now() - _cacheTs.antraege > CACHE_TTL)) await loadAntraege();
+  if (view === 'lizenzen' && (Date.now() - _cacheTs.lizenzen > CACHE_TTL)) await loadLizenzen();
+  if (view === 'register' && (Date.now() - _cacheTs.register > CACHE_TTL)) await loadRegister();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -526,11 +535,22 @@ async function submitAntrag(e) {
 
   // Pflichtfelder prüfen
   let valid = true;
+  let firstInvalid = null;
   document.querySelectorAll('#form-antrag-fields [required]').forEach(el => {
     el.classList.remove('invalid');
-    if (!el.value.trim()) { el.classList.add('invalid'); valid = false; }
+    if (!el.value.trim()) {
+      el.classList.add('invalid');
+      if (!firstInvalid) firstInvalid = el;
+      valid = false;
+    }
   });
-  if (!valid) return;
+  if (!valid) {
+    if (firstInvalid) {
+      firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => firstInvalid.focus(), 300);
+    }
+    return;
+  }
 
   btn.disabled = true; btn.textContent = 'Wird eingereicht …';
   removeAntragError();
@@ -589,7 +609,8 @@ async function submitAntrag(e) {
 
     $id('form-antrag').reset();
     const s = $id('antrag-success');
-    s.textContent = '✓ Ihr Antrag wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen und Sie per E-Mail informieren.';
+    s.innerHTML = '✓ Ihr Antrag wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen.' +
+      '<div style="font-size:.8rem;margin-top:6px;opacity:.8">💡 Tipp: Für automatische E-Mail-Benachrichtigungen bei Statusänderungen kann ein Power-Automate-Flow eingerichtet werden.</div>';
     s.classList.remove('hidden');
     allAntraege = [];
     updateOpenBadge();
@@ -634,6 +655,7 @@ async function loadAntraege() {
       const db = new Date(b.fields?.Created || b.createdDateTime || 0);
       return db - da;
     });
+    _cacheTs.antraege = Date.now();
     renderAntraege();
     updateOpenBadge();
   } catch(e) {
@@ -647,11 +669,20 @@ function filterAntraege() { renderAntraege(); }
 function renderAntraege() {
   const statusF = $id('filter-status')?.value || '';
   const riskF   = $id('filter-risk')?.value   || '';
+  const searchQ = ($id('search-antraege')?.value || '').toLowerCase().trim();
+
+  // Non-Gremium: nur eigene Anträge anzeigen
+  const myEmail = (account?.username || account?.idTokenClaims?.preferred_username || '').toLowerCase();
 
   let items = allAntraege.filter(i => {
     const f = i.fields;
     if (statusF && f[COL.status] !== statusF) return false;
     if (riskF   && f[COL.risiko] !== riskF)  return false;
+    if (!isGremium && myEmail && (f.Author0EMail || '').toLowerCase() !== myEmail) return false;
+    if (searchQ) {
+      const hay = [f.Title, f[COL.hersteller], f[COL.verantw], f[COL.komponenten]].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(searchQ)) return false;
+    }
     return true;
   });
 
@@ -740,6 +771,18 @@ function openAntragPanel(itemId) {
       ${f[COL.freigabeDatum]    ? row('Freigabedatum',      fmtDate(f[COL.freigabeDatum])) : ''}
     </div>` : '';
 
+  // Rückfrage-Antwort-Sektion für nicht-Gremium-User
+  const rueckfrageSection = (!isGremium && f[COL.status] === 'Rückfrage') ? `
+    <div style="background:#faf5ff;border:1.5px solid #d8b4fe;border-radius:10px;padding:16px;margin-top:12px">
+      <div style="font-size:.8rem;font-weight:700;color:#7e22ce;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">💬 Rückfrage des Gremiums</div>
+      ${f[COL.gremiumKommentar] ? `<div style="background:#fff;border:1px solid #e9d5ff;border-radius:7px;padding:10px 12px;font-size:.85rem;color:#1e2939;white-space:pre-wrap;margin-bottom:14px">${esc(f[COL.gremiumKommentar])}</div>` : ''}
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">Ihre Antwort</label>
+        <textarea id="rueck-antwort" class="form-control" rows="3" placeholder="Bitte beantworten Sie die Rückfrage hier…"></textarea>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="submitRueckfrageAntwort(${item.id})">Antwort senden</button>
+    </div>` : '';
+
   const gremiumSection = isGremium ? `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
@@ -765,7 +808,7 @@ function openAntragPanel(itemId) {
       </div>
     </div>` : '';
 
-  $id('panel-body').innerHTML = rows1 + statusSection + gremiumSection;
+  $id('panel-body').innerHTML = rows1 + statusSection + rueckfrageSection + gremiumSection;
   openPanel();
 }
 
@@ -774,8 +817,25 @@ async function saveGremiumDecision(itemId, forceStatus) {
   const kommentar = $id('pg-kommentar')?.value?.trim() || '';
   const auflagen  = $id('pg-auflagen')?.value?.trim()  || '';
 
+  if ((status === 'Genehmigt' || status === 'Abgelehnt') && !kommentar) {
+    showToast('Bitte eine Begründung eingeben bevor Sie ' + (status === 'Genehmigt' ? 'genehmigen' : 'ablehnen') + '.', 'error');
+    $id('pg-kommentar')?.focus();
+    return;
+  }
+
+  const prevItem = allAntraege.find(i => i.id == itemId);
+  const prevKommentar = prevItem?.fields?.[COL.gremiumKommentar] || '';
+  const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
+              new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+  let newKommentar = prevKommentar;
+  if (kommentar) {
+    newKommentar = prevKommentar
+      ? `[${now}] ${kommentar}\n──\n${prevKommentar}`
+      : `[${now}] ${kommentar}`;
+  }
+
   const fields = { [COL.status]: status };
-  if (kommentar) fields[COL.gremiumKommentar] = kommentar;
+  if (newKommentar) fields[COL.gremiumKommentar] = newKommentar;
   if (auflagen)  fields[COL.auflagen]         = auflagen;
   if (status === 'Genehmigt') fields[COL.freigabeDatum] = new Date().toISOString().slice(0, 10);
 
@@ -783,6 +843,8 @@ async function saveGremiumDecision(itemId, forceStatus) {
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
     if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
+    const savedName = allAntraege.find(i => i.id == itemId)?.fields?.Title || '';
+    showToast(`✓ Entscheidung „${status}" gespeichert${savedName ? ' für ' + savedName : ''}.`);
 
     // Bei Genehmigung: automatisch Draft-Lizenz erstellen (falls noch keine existiert)
     if (status === 'Genehmigt' && listLizenzId) {
@@ -836,7 +898,40 @@ async function saveGremiumDecision(itemId, forceStatus) {
     renderAntraege();
     updateOpenBadge();
   } catch(e) {
-    alert('Fehler beim Speichern: ' + e.message);
+    showToast('Fehler beim Speichern: ' + e.message, 'error');
+  }
+}
+
+async function submitRueckfrageAntwort(itemId) {
+  const text = $id('rueck-antwort')?.value?.trim() || '';
+  if (!text) {
+    showToast('Bitte eine Antwort eingeben.', 'error');
+    return;
+  }
+
+  const item = allAntraege.find(i => i.id == itemId);
+  const prevKommentar = item?.fields?.[COL.gremiumKommentar] || '';
+  const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
+              new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+  const newKommentar = prevKommentar
+    ? `[${now}] Antwort: ${text}\n──\n${prevKommentar}`
+    : `[${now}] Antwort: ${text}`;
+
+  const fields = {
+    [COL.status]: 'Eingereicht',
+    [COL.gremiumKommentar]: newKommentar,
+  };
+
+  try {
+    await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
+    const idx = allAntraege.findIndex(i => i.id == itemId);
+    if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
+    closePanel();
+    renderAntraege();
+    updateOpenBadge();
+    showToast('Antwort eingereicht.');
+  } catch(e) {
+    showToast('Fehler beim Senden: ' + e.message, 'error');
   }
 }
 
@@ -854,6 +949,7 @@ async function loadLizenzen() {
   try {
     const data = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=*)&$top=999`);
     allLizenzen = data.value || [];
+    _cacheTs.lizenzen = Date.now();
 
     // spUserMap aus vorhandenen Lizenz-Einträgen befüllen (KI-User-Feld enthält LookupIds)
     for (const item of allLizenzen) {
@@ -878,6 +974,7 @@ function renderLizenzen() {
   $id('lizenzen-loading').classList.add('hidden');
 
   const today = new Date();
+  // Stats always use all items
   const totalKosten = allLizenzen.reduce((s, i) => s + (parseFloat(i.fields?.[COL.kosten]) || 0), 0);
   const expireSoon  = allLizenzen.filter(i => {
     const d = i.fields?.[COL.vertragsEnde];
@@ -897,7 +994,32 @@ function renderLizenzen() {
     return;
   }
 
-  const rows = allLizenzen.map(i => {
+  // Build filtered items list
+  const searchQ = ($id('search-lizenzen')?.value || '').toLowerCase().trim();
+  const typF    = $id('filter-lizenztyp')?.value || '';
+  const ablaufF = $id('filter-ablauf')?.value    || '';
+
+  let items = allLizenzen.filter(i => {
+    const f = i.fields;
+    if (searchQ) {
+      const hay = [f[COL.kiSystem], f.Title, f[COL.anbieter], f[COL.lizenztyp]].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(searchQ)) return false;
+    }
+    if (typF && f[COL.lizenztyp] !== typF) return false;
+    if (ablaufF) {
+      const ende = f[COL.vertragsEnde];
+      const diff = ende ? (new Date(ende) - today) / 86400000 : null;
+      if (ablaufF === 'expired') {
+        if (diff === null || diff >= 0) return false;
+      } else {
+        const days = parseInt(ablaufF);
+        if (diff === null || diff < 0 || diff > days) return false;
+      }
+    }
+    return true;
+  });
+
+  const rows = items.map(i => {
     const f      = i.fields;
     const ende   = f[COL.vertragsEnde];
     const diff   = ende ? (new Date(ende) - today) / 86400000 : null;
@@ -1326,6 +1448,11 @@ async function saveLizenz() {
   // Verantwortlich IT: wird immer auf den aktuell eingeloggten User gesetzt
   if (colOk(COL.verantwIT)) detailFields[COL.verantwIT] = account?.name || account?.username || '';
 
+  // ZugewieseneNutzer: Textfeld mit den Namen aller zugewiesenen User befüllen
+  if (COL.zugewieseneNutzer !== null && colOk(COL.zugewieseneNutzer) && lizenzUsers.length > 0) {
+    detailFields[COL.zugewieseneNutzer] = lizenzUsers.map(u => u.name || u.email).filter(Boolean).join('; ');
+  }
+
   // Entwurfs-Notiz entfernen: war das Item ein Entwurf, forcieren wir den Notizen-Wert
   // (auch wenn der User nichts eingetippt hat → leeres '' löscht die Marker-Notiz)
   if (wasDraft && colOk(COL.notizen)) {
@@ -1458,6 +1585,11 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
     if (af[COL.zweckUnternehmen] && regColOk('Anwendungsbereiche'))  pf['Anwendungsbereiche'] = af[COL.zweckUnternehmen];
     if (af[COL.keyUser]          && regColOk('Schulungszielgruppe')) pf['Schulungszielgruppe']= af[COL.keyUser];
     if (regColOk('GueltigAb'))   pf['GueltigAb'] = new Date().toISOString().slice(0, 10);
+    if (regColOk('NaechstePruefung')) {
+      const naechste = new Date();
+      naechste.setFullYear(naechste.getFullYear() + 1);
+      pf['NaechstePruefung'] = naechste.toISOString().slice(0, 10);
+    }
 
     // Kollegen (KI-User) als Text in KeyUser
     if (users.length && regColOk('KeyUser')) {
@@ -1505,7 +1637,7 @@ async function deleteLizenz(itemId) {
     allLizenzen = [];
     await loadLizenzen();
   } catch(e) {
-    alert('Fehler: ' + e.message);
+    showToast('Fehler: ' + e.message, 'error');
   }
 }
 
@@ -1523,6 +1655,7 @@ async function loadRegister() {
   try {
     const data = await gGet(`/sites/${siteId}/lists/${listRegisterId}/items?$expand=fields($select=*)&$top=999`);
     allRegister = data.value || [];
+    _cacheTs.register = Date.now();
     renderRegister();
   } catch(e) {
     $id('register-loading').textContent = 'Fehler: ' + e.message;
@@ -1628,6 +1761,27 @@ function closePanel() {
 function closeModal(e) {
   if (e && e.target !== $id('modal-overlay')) return;
   $id('modal-overlay').classList.add('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TOAST NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════
+function showToast(msg, type = 'success', duration = 4000) {
+  let container = $id('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = msg;
+  container.appendChild(toast);
+  requestAnimationFrame(() => { requestAnimationFrame(() => toast.classList.add('toast-show')); });
+  setTimeout(() => {
+    toast.classList.remove('toast-show');
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+  }, duration);
 }
 
 // ═══════════════════════════════════════════════════════════════════

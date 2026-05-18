@@ -83,6 +83,7 @@
           <p id="antraege-sub" class="view-desc"></p>
         </div>
         <div class="toolbar">
+          <input type="search" id="search-antraege" class="filter-search" placeholder="🔍 Suchen…" oninput="filterAntraege()">
           <select id="filter-status" class="filter-select" onchange="filterAntraege()">
             <option value="">Alle Status</option>
             <option value="Eingereicht">Eingereicht</option>
@@ -138,7 +139,26 @@
           <h2>Lizenzmanagement</h2>
           <p class="view-desc">Alle KI-Lizenzen der DIHAG-Gruppe</p>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="openLizenzModal()">+ Neue Lizenz</button>
+        <div class="toolbar">
+          <input type="search" id="search-lizenzen" class="filter-search" placeholder="🔍 Suchen…" oninput="renderLizenzen()">
+          <select id="filter-lizenztyp" class="filter-select" onchange="renderLizenzen()">
+            <option value="">Alle Typen</option>
+            <option value="Enterprise">Enterprise</option>
+            <option value="Team">Team</option>
+            <option value="Pro">Pro</option>
+            <option value="Free">Free</option>
+            <option value="API">API</option>
+            <option value="Sonstiges">Sonstiges</option>
+          </select>
+          <select id="filter-ablauf" class="filter-select" onchange="renderLizenzen()">
+            <option value="">Alle Ablaufdaten</option>
+            <option value="30">Ablauf ≤ 30 Tage</option>
+            <option value="60">Ablauf ≤ 60 Tage</option>
+            <option value="90">Ablauf ≤ 90 Tage</option>
+            <option value="expired">Abgelaufen</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="openLizenzModal()">+ Neue Lizenz</button>
+        </div>
       </div>
       <div id="lizenzen-loading" class="loading-state">Lade Lizenzen …</div>
       <div id="lizenzen-wrap"></div>
