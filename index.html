@@ -56,6 +56,9 @@
     <button class="nav-tab" data-view="register" onclick="switchView('register')">
       📚 KI-Register
     </button>
+    <button class="nav-tab" id="tab-einstellungen" data-view="einstellungen" onclick="switchView('einstellungen')" style="display:none">
+      ⚙️ Einstellungen
+    </button>
   </nav>
 
   <main class="main">
@@ -110,15 +113,10 @@
       <div class="view-header-row">
         <div>
           <h2>KI-Register</h2>
-          <p class="view-desc">Alle freigegebenen und registrierten KI-Systeme der DIHAG-Gruppe</p>
+          <p class="view-desc">Alle freigegebenen KI-Systeme der DIHAG-Gruppe</p>
         </div>
         <div class="toolbar">
-          <select id="reg-filter-status" class="filter-select" onchange="filterRegister()">
-            <option value="">Alle Status</option>
-            <option value="Aktiv">Aktiv</option>
-            <option value="Inaktiv">Inaktiv</option>
-            <option value="Archiviert">Archiviert</option>
-          </select>
+          <input type="search" id="search-register" class="filter-search" placeholder="🔍 Suchen…" oninput="filterRegister()">
           <select id="reg-filter-risk" class="filter-select" onchange="filterRegister()">
             <option value="">Alle Risiken</option>
             <option value="Geringes Risiko">Geringes Risiko</option>
@@ -130,6 +128,15 @@
       </div>
       <div id="register-loading" class="loading-state">Lade KI-Register …</div>
       <div id="register-wrap"></div>
+    </div>
+
+    <!-- VIEW: Einstellungen (nur Gremium) -->
+    <div id="view-einstellungen" class="view hidden">
+      <div class="view-header">
+        <h2>⚙️ Einstellungen</h2>
+        <p class="view-desc">Administrative Konfiguration des KI-Genehmigungssystems – Genehmiger verwalten und E-Mail-Benachrichtigungen einrichten.</p>
+      </div>
+      <div id="einstellungen-body"></div>
     </div>
 
     <!-- VIEW: Lizenzen -->

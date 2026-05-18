@@ -431,9 +431,10 @@ async function boot() {
     const uName = account?.name || account?.username || '';
     $id('user-name').textContent = uName;
 
-    // Tabs: Lizenzen nur für Gremium, Register nur wenn Liste bekannt
+    // Tabs: Lizenzen + Einstellungen nur für Gremium, Register nur wenn Liste bekannt
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
+      $id('tab-einstellungen').style.display = '';
     } else {
       document.querySelector('[data-view="lizenzen"]').style.display = 'none';
     }
@@ -486,6 +487,7 @@ async function switchView(view) {
   if (view === 'antraege' && (Date.now() - _cacheTs.antraege > CACHE_TTL)) await loadAntraege();
   if (view === 'lizenzen' && (Date.now() - _cacheTs.lizenzen > CACHE_TTL)) await loadLizenzen();
   if (view === 'register' && (Date.now() - _cacheTs.register > CACHE_TTL)) await loadRegister();
+  if (view === 'einstellungen') renderEinstellungen();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -609,8 +611,23 @@ async function submitAntrag(e) {
 
     $id('form-antrag').reset();
     const s = $id('antrag-success');
-    s.innerHTML = '✓ Ihr Antrag wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen.' +
-      '<div style="font-size:.8rem;margin-top:6px;opacity:.8">💡 Tipp: Für automatische E-Mail-Benachrichtigungen bei Statusänderungen kann ein Power-Automate-Flow eingerichtet werden.</div>';
+    s.innerHTML = `✓ Ihr Antrag <strong>${esc(titleVal)}</strong> wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen.`;
+
+    // Genehmiger per mailto benachrichtigen (wenn konfiguriert)
+    const _st = loadSettings();
+    const _gen = _st.genehmiger || [];
+    if (_st.benachrichtigung?.beiEinreichung !== false && _gen.length) {
+      const to  = _gen.map(g => g.email).join(';');
+      const sub = encodeURIComponent(`[KI-Antrag] ${titleVal} – Prüfung erforderlich`);
+      const bod = encodeURIComponent(
+        `Sehr geehrte Damen und Herren,\n\nes liegt ein neuer KI-Antrag zur Prüfung vor:\n\n` +
+        `Bezeichnung: ${titleVal}\nAntragsteller: ${account?.name || account?.username || ''}\n\n` +
+        `Bitte im KI-Dashboard prüfen:\n${location.origin + location.pathname}\n\nMit freundlichen Grüßen`
+      );
+      s.innerHTML += `<div style="margin-top:12px">
+        <a href="mailto:${esc(to)}?subject=${sub}&body=${bod}" class="btn btn-outline btn-sm">📧 Genehmiger informieren</a>
+      </div>`;
+    }
     s.classList.remove('hidden');
     allAntraege = [];
     updateOpenBadge();
@@ -787,24 +804,18 @@ function openAntragPanel(itemId) {
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
       <div class="form-group">
-        <label class="form-label">Status</label>
-        <select id="pg-status" class="form-control">
-          ${STATUS_OPTS.map(s => `<option value="${s}"${f[COL.status] === s ? ' selected' : ''}>${s}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Kommentar / Begründung</label>
-        <textarea id="pg-kommentar" class="form-control" rows="3">${esc(f[COL.gremiumKommentar] || '')}</textarea>
+        <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
+        <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(f[COL.gremiumKommentar] || '')}</textarea>
       </div>
       <div class="form-group">
         <label class="form-label">Auflagen / Bedingungen</label>
-        <textarea id="pg-auflagen" class="form-control" rows="3">${esc(f[COL.auflagen] || '')}</textarea>
+        <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
       </div>
       <div class="panel-actions">
         <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">✓ Genehmigen</button>
         <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
         <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
-        <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id})">💾 Speichern</button>
+        <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
       </div>
     </div>` : '';
 
@@ -813,7 +824,7 @@ function openAntragPanel(itemId) {
 }
 
 async function saveGremiumDecision(itemId, forceStatus) {
-  const status    = forceStatus || $id('pg-status')?.value;
+  const status    = forceStatus || allAntraege.find(i => i.id == itemId)?.fields?.[COL.status] || 'In Prüfung';
   const kommentar = $id('pg-kommentar')?.value?.trim() || '';
   const auflagen  = $id('pg-auflagen')?.value?.trim()  || '';
 
@@ -843,8 +854,42 @@ async function saveGremiumDecision(itemId, forceStatus) {
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
     if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
-    const savedName = allAntraege.find(i => i.id == itemId)?.fields?.Title || '';
+    const antragAfter = allAntraege.find(i => i.id == itemId);
+    const savedName   = antragAfter?.fields?.Title || '';
     showToast(`✓ Entscheidung „${status}" gespeichert${savedName ? ' für ' + savedName : ''}.`);
+
+    // Antragsteller per mailto benachrichtigen (wenn konfiguriert + final-Entscheidung)
+    if ((status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage') && antragAfter) {
+      const authorEmail = antragAfter.fields?.Author0EMail || '';
+      const _st2 = loadSettings();
+      if (_st2.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
+        const sub2 = encodeURIComponent(`[KI-Antrag] ${savedName} – ${status}`);
+        const bod2 = encodeURIComponent(
+          `Sehr geehrte/r Antragsteller/in,\n\nIhr KI-Antrag „${savedName}" wurde vom Gremium bearbeitet:\n\n` +
+          `Entscheidung: ${status}\n${kommentar ? 'Kommentar: ' + kommentar + '\n' : ''}` +
+          `\nBitte im KI-Dashboard einsehen:\n${location.origin + location.pathname}\n\n` +
+          `Mit freundlichen Grüßen\nKI-Koordinierungsgremium DIHAG`
+        );
+        showToast(
+          `📧 <a href="mailto:${esc(authorEmail)}?subject=${sub2}&body=${bod2}" style="color:#fff;text-decoration:underline">Antragsteller benachrichtigen</a>`,
+          'info', 10000
+        );
+      }
+      // Power Automate Flow anrufen (wenn URL hinterlegt)
+      const paUrl = _st2.paUrl || '';
+      if (paUrl) {
+        fetch(paUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            antragId: itemId, systemName: savedName, status, kommentar,
+            antragsteller: authorEmail,
+            entscheider: account?.name || account?.username || '',
+            timestamp: new Date().toISOString()
+          })
+        }).catch(e => console.warn('Power Automate Flow fehlgeschlagen:', e.message));
+      }
+    }
 
     // Bei Genehmigung: automatisch Draft-Lizenz erstellen (falls noch keine existiert)
     if (status === 'Genehmigt' && listLizenzId) {
@@ -1665,23 +1710,26 @@ async function loadRegister() {
 function filterRegister() { renderRegister(); }
 
 function renderRegister() {
-  const statusF = $id('reg-filter-status')?.value || '';
   const riskF   = $id('reg-filter-risk')?.value   || '';
+  const searchF = ($id('search-register')?.value || '').toLowerCase().trim();
 
   let items = allRegister.filter(i => {
     const f = i.fields;
-    if (statusF && f[COL_REG.status] !== statusF) return false;
-    if (riskF   && f[COL_REG.risiko] !== riskF)  return false;
+    if (riskF && f[COL_REG.risiko] !== riskF) return false;
+    if (searchF) {
+      const hay = [f.Title, f[COL_REG.verantw], f[COL_REG.hersteller], f['KeyUser']].join(' ').toLowerCase();
+      if (!hay.includes(searchF)) return false;
+    }
     return true;
   });
 
   $id('register-loading').classList.add('hidden');
 
-  const aktiv = allRegister.filter(i => (i.fields?.[COL_REG.status] || '').toLowerCase() === 'aktiv').length;
+  const mitFreigabe = allRegister.filter(i => !!i.fields?.GueltigAb).length;
   const stats = `<div class="stats-row">
-    <div class="stat-card accent"><div class="stat-value">${allRegister.length}</div><div class="stat-label">Einträge gesamt</div></div>
-    <div class="stat-card green"><div class="stat-value">${aktiv}</div><div class="stat-label">Aktive Systeme</div></div>
-    <div class="stat-card orange"><div class="stat-value">${allRegister.length - aktiv}</div><div class="stat-label">Inaktiv / Archiviert</div></div>
+    <div class="stat-card accent"><div class="stat-value">${allRegister.length}</div><div class="stat-label">Systeme gesamt</div></div>
+    <div class="stat-card green"><div class="stat-value">${mitFreigabe}</div><div class="stat-label">Freigegeben</div></div>
+    <div class="stat-card orange"><div class="stat-value">${allRegister.length - mitFreigabe}</div><div class="stat-label">In Vorbereitung</div></div>
   </div>`;
 
   if (!items.length) {
@@ -1691,14 +1739,17 @@ function renderRegister() {
 
   const rows = items.map(i => {
     const f = i.fields;
+    const keyUser = f['KeyUser'] || '';
     return `<tr onclick="openRegisterPanel(${i.id})" style="cursor:pointer">
-      <td><strong>${esc(f.Title || '–')}</strong></td>
+      <td>
+        <strong>${esc(f.Title || '–')}</strong>
+        ${keyUser ? `<div style="font-size:11px;color:#6b7280;margin-top:3px">👥 ${esc(keyUser)}</div>` : ''}
+      </td>
       <td>${esc(f[COL_REG.verantw] || '–')}</td>
       <td>${esc(f[COL_REG.hersteller] || f[COL_REG.anbieter] || '–')}</td>
       <td>${riskBadge(f[COL_REG.risiko])}</td>
       <td>${f[COL_REG.nutzungsart] ? `<span class="badge-type">${esc(f[COL_REG.nutzungsart])}</span>` : '–'}</td>
-      <td>${statusBadge(f[COL_REG.status])}</td>
-      <td>${fmtDate(f[COL_REG.freigabeDatum])}</td>
+      <td>${fmtDate(f['GueltigAb'])}</td>
     </tr>`;
   }).join('');
 
@@ -1706,8 +1757,8 @@ function renderRegister() {
     <table>
       <thead>
         <tr>
-          <th>KI-System</th><th>Verantwortl. Stelle</th><th>Hersteller</th>
-          <th>Risiko</th><th>Nutzungsart</th><th>Status</th><th>Freigabe</th>
+          <th>KI-System / Nutzer</th><th>Verantwortl. Stelle</th><th>Hersteller</th>
+          <th>Risiko</th><th>Nutzungsart</th><th>Geplant ab</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1720,7 +1771,7 @@ function openRegisterPanel(itemId) {
   if (!item) return;
   const f = item.fields;
 
-  $id('panel-title').innerHTML = `${statusBadge(f[COL_REG.status])} <span style="margin-left:8px">${esc(f.Title || '–')}</span>`;
+  $id('panel-title').innerHTML = `🤖 <span style="margin-left:4px">${esc(f.Title || '–')}</span>`;
 
   const row = (label, value, pre = false) =>
     `<div class="panel-field">
@@ -1736,9 +1787,16 @@ function openRegisterPanel(itemId) {
       ${row('Hersteller / Anbieter', esc(f[COL_REG.hersteller] || f[COL_REG.anbieter]))}
       ${row('Nutzungsart',           esc(f[COL_REG.nutzungsart]))}
       ${row('Risikokategorie',       riskBadge(f[COL_REG.risiko]))}
-      ${row('Status',                statusBadge(f[COL_REG.status]))}
-      ${row('Freigabedatum',         fmtDate(f[COL_REG.freigabeDatum]))}
+      ${f['KeyUser'] ? row('Nutzer / Key User',  esc(f['KeyUser'])) : ''}
+      ${f['GueltigAb']          ? row('Gültig ab',        fmtDate(f['GueltigAb'])) : ''}
+      ${f['NaechstePruefung']   ? row('Nächste Prüfung',  fmtDate(f['NaechstePruefung'])) : ''}
+      ${f['Beschreibung']       ? row('Beschreibung',     esc(f['Beschreibung']), true) : ''}
     </div>
+    ${f['Schulungszielgruppe'] || f['Anwendungsbereiche'] ? `<div class="panel-section">
+      <div class="panel-section-title">Einsatz & Schulung</div>
+      ${f['Anwendungsbereiche']   ? row('Anwendungsbereiche', esc(f['Anwendungsbereiche']), true) : ''}
+      ${f['Schulungszielgruppe']  ? row('Schulungszielgruppe', esc(f['Schulungszielgruppe']), true) : ''}
+    </div>` : ''}
     ${f[COL_REG.notizen] ? `<div class="panel-section">
       <div class="panel-section-title">Notizen</div>
       ${row('', esc(f[COL_REG.notizen]), true)}
@@ -1847,4 +1905,122 @@ function riskBadge(r) {
   };
   const cls = map[r.toLowerCase().trim()] || 'r-normal';
   return `<span class="badge-risk ${cls}">${esc(r)}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EINSTELLUNGEN (nur Gremium)
+// ═══════════════════════════════════════════════════════════════════
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem('ki_settings') || '{}'); } catch { return {}; }
+}
+function saveSettingsData(data) {
+  localStorage.setItem('ki_settings', JSON.stringify(data));
+}
+
+function renderEinstellungen() {
+  const settings = loadSettings();
+  const genehmiger = settings.genehmiger || [];
+  const ben = settings.benachrichtigung || {};
+
+  const genList = genehmiger.length
+    ? genehmiger.map((g, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f9fafb;border-radius:8px;margin-bottom:6px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.875rem;font-weight:600">${esc(g.name || g.email)}</div>
+            ${g.name && g.name !== g.email ? `<div style="font-size:.75rem;color:#9ca3af">${esc(g.email)}</div>` : ''}
+          </div>
+          <button class="btn btn-neutral btn-sm" onclick="removeGenehmiger(${i})">Entfernen</button>
+        </div>`).join('')
+    : `<div class="empty-state" style="padding:16px 10px;font-size:.82rem">Noch keine Genehmiger hinterlegt.</div>`;
+
+  $id('einstellungen-body').innerHTML = `
+    <div class="settings-grid">
+
+      <div class="settings-card">
+        <div class="settings-card-title">👤 Genehmiger verwalten</div>
+        <p style="font-size:.82rem;color:#6b7280;margin-bottom:14px;line-height:1.5">
+          Personen, die KI-Anträge prüfen und entscheiden. Bei neuen Anträgen kann ein vorausgefüllter E-Mail-Entwurf geöffnet werden.
+        </p>
+        <div id="gen-list">${genList}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:12px;align-items:end">
+          <div>
+            <label class="form-label">Name</label>
+            <input id="new-gen-name" type="text" class="form-control" placeholder="Max Mustermann">
+          </div>
+          <div>
+            <label class="form-label">E-Mail</label>
+            <input id="new-gen-email" type="email" class="form-control" placeholder="max@dihag.com">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="addGenehmiger()" style="white-space:nowrap">+ Hinzufügen</button>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">📧 E-Mail-Benachrichtigungen</div>
+        <p style="font-size:.82rem;color:#6b7280;margin-bottom:14px;line-height:1.5">
+          Das Dashboard öffnet einen vorausgefüllten E-Mail-Entwurf in Ihrem E-Mail-Programm. Versand erfolgt durch Sie manuell.
+        </p>
+        <label class="settings-check">
+          <input type="checkbox" id="notif-einreichung" ${ben.beiEinreichung !== false ? 'checked' : ''}>
+          <span>Bei neuem Antrag → Genehmiger-Entwurf anzeigen</span>
+        </label>
+        <label class="settings-check">
+          <input type="checkbox" id="notif-entscheidung" ${ben.beiEntscheidung !== false ? 'checked' : ''}>
+          <span>Nach Gremium-Entscheidung → Antragsteller-Entwurf anzeigen</span>
+        </label>
+        <div style="margin-top:20px">
+          <label class="form-label">Power Automate Flow-URL <span style="font-weight:400;color:#9ca3af">(optional)</span></label>
+          <input id="pa-url" type="url" class="form-control" value="${esc(settings.paUrl || '')}"
+            placeholder="https://prod.westeurope.logic.azure.com/workflows/…">
+          <div class="form-hint">Wenn hinterlegt, sendet das Dashboard bei jeder Entscheidung einen HTTP POST an diesen Flow (für vollautomatische E-Mails).</div>
+        </div>
+      </div>
+
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px;align-items:center">
+      <button class="btn btn-primary" onclick="saveSettings()">💾 Einstellungen speichern</button>
+      <span id="settings-saved" style="font-size:.82rem;color:#15803d;display:none">✓ Gespeichert</span>
+    </div>`;
+}
+
+function saveSettings() {
+  const prev = loadSettings();
+  const data = {
+    genehmiger: prev.genehmiger || [],
+    benachrichtigung: {
+      beiEinreichung:  $id('notif-einreichung')?.checked  ?? true,
+      beiEntscheidung: $id('notif-entscheidung')?.checked ?? true,
+    },
+    paUrl: $id('pa-url')?.value.trim() || ''
+  };
+  saveSettingsData(data);
+  showToast('Einstellungen gespeichert.');
+  const saved = $id('settings-saved');
+  if (saved) { saved.style.display = ''; setTimeout(() => saved.style.display = 'none', 2500); }
+}
+
+function addGenehmiger() {
+  const name  = $id('new-gen-name')?.value.trim();
+  const email = $id('new-gen-email')?.value.trim();
+  if (!email) { showToast('Bitte E-Mail-Adresse eingeben.', 'error'); return; }
+  const settings  = loadSettings();
+  const list      = settings.genehmiger || [];
+  if (list.some(g => g.email.toLowerCase() === email.toLowerCase())) {
+    showToast('Diese E-Mail-Adresse ist bereits hinterlegt.', 'error'); return;
+  }
+  list.push({ name: name || email, email });
+  settings.genehmiger = list;
+  saveSettingsData(settings);
+  renderEinstellungen();
+  showToast(`✓ ${name || email} als Genehmiger hinzugefügt.`);
+}
+
+function removeGenehmiger(index) {
+  const settings = loadSettings();
+  const list = settings.genehmiger || [];
+  const removed = list.splice(index, 1)[0];
+  settings.genehmiger = list;
+  saveSettingsData(settings);
+  renderEinstellungen();
+  if (removed) showToast(`${removed.name || removed.email} entfernt.`, 'info');
 }
