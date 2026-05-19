@@ -650,13 +650,16 @@ async function submitAntrag(e) {
     s.innerHTML = `✓ Ihr Antrag <strong>${esc(titleVal)}</strong> wurde eingereicht. Das KI-Koordinierungsgremium wird ihn prüfen.`;
 
     // Genehmiger automatisch per Graph-Mail benachrichtigen (wenn konfiguriert)
+    // Antragsteller aus der Empfängerliste ausschließen – kein Self-Notify
     const _st = loadSettings();
     const _gen = _st.genehmiger || [];
-    if (_st.benachrichtigung?.beiEinreichung !== false && _gen.length) {
+    const _myEmail = (account?.username || '').toLowerCase();
+    const _genToNotify = _gen.filter(g => g.email.toLowerCase() !== _myEmail);
+    if (_st.benachrichtigung?.beiEinreichung !== false && _genToNotify.length) {
       const sender  = account?.name || account?.username || 'Antragsteller';
       const deepUrl = `${location.origin}${location.pathname}?antrag=${newItem.id}`;
       sendMail(
-        _gen.map(g => ({ address: g.email, name: g.name })),
+        _genToNotify.map(g => ({ address: g.email, name: g.name })),
         `[KI-Antrag] ${titleVal} – Prüfung erforderlich`,
         mailTemplate(
           'Neuer KI-Antrag zur Prüfung eingegangen',
@@ -845,12 +848,15 @@ function openAntragPanel(itemId) {
       ${row('Anwendungsbereich intern',   esc(f[COL.zweckUnternehmen]), true)}
     </div>`;
 
+  // APPROVALS-Token aus Kommentar für die Anzeige entfernen
+  const kommentarClean = (f[COL.gremiumKommentar] || '').replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+
   // Für alle User: Status-Bereich (read-only für normale User)
   const statusSection = !isGremium ? `
     <div class="panel-section">
       <div class="panel-section-title">Status</div>
       ${row('Aktueller Status', statusBadge(f[COL.status]))}
-      ${f[COL.gremiumKommentar] ? row('Gremium-Kommentar', esc(f[COL.gremiumKommentar]), true) : ''}
+      ${kommentarClean ? row('Gremium-Kommentar', esc(kommentarClean), true) : ''}
       ${f[COL.auflagen]         ? row('Auflagen',           esc(f[COL.auflagen]), true) : ''}
       ${f[COL.freigabeDatum]    ? row('Freigabedatum',      fmtDate(f[COL.freigabeDatum])) : ''}
     </div>` : '';
@@ -867,35 +873,51 @@ function openAntragPanel(itemId) {
       <button class="btn btn-primary btn-sm" onclick="submitRueckfrageAntwort(${item.id})">Antwort senden</button>
     </div>` : '';
 
-  const isDecided = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
+  const isDecided    = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
 
   // Einstimmig-Modus: Abstimmungsstand aus GremiumKommentar lesen
-  const _stPanel     = loadSettings();
-  const einstimmig   = (_stPanel.benachrichtigung?.genehmigungsmodus || 'einstimmig') === 'einstimmig';
-  const _genPanel    = _stPanel.genehmiger || [];
+  const _stPanel       = loadSettings();
+  const einstimmig     = (_stPanel.benachrichtigung?.genehmigungsmodus || 'einstimmig') === 'einstimmig';
+  const _genPanel      = _stPanel.genehmiger || [];
   const panelApprovals = parseApprovals(f[COL.gremiumKommentar]);
   const myEmailPanel   = (account?.username || '').toLowerCase();
-  const myApprovedAlready = panelApprovals.includes(myEmailPanel);
-  const showApprovalTracker = !isDecided && einstimmig && _genPanel.length > 1;
+
+  // Self-Approval-Guard: Gremium-User ist zugleich der Antragsteller → keine Aktionsbuttons
+  const antragAuthorEmail  = (f.Author0EMail || '').toLowerCase();
+  const isOwnAntrag        = myEmailPanel && antragAuthorEmail && myEmailPanel === antragAuthorEmail;
+
+  // Effektive Genehmiger = konfigurierte Liste ohne den Antragsteller (darf nicht selbst zustimmen)
+  const effectiveGenehmiger  = _genPanel.filter(g => g.email.toLowerCase() !== antragAuthorEmail);
+  const myApprovedAlready    = panelApprovals.includes(myEmailPanel);
+  const showApprovalTracker  = !isDecided && !isOwnAntrag && einstimmig && effectiveGenehmiger.length > 1;
+
+  // Wiederverwendbarer Read-Only-Block (entschieden oder eigener Antrag)
+  const decidedBlock = `
+    <div style="margin-bottom:12px">
+      ${statusBadge(f[COL.status])}
+      ${f[COL.freigabeDatum] ? `<span style="font-size:.8rem;color:#6b7280;margin-left:8px">📅 ${fmtDate(f[COL.freigabeDatum])}</span>` : ''}
+    </div>
+    ${kommentarClean ? `
+      <div style="margin-bottom:10px">
+        <div class="panel-field-label">Begründung</div>
+        <div class="panel-field-value pre" style="background:#f9fafb;padding:8px 10px;border-radius:7px;border:1px solid #e5e9ef">${esc(kommentarClean)}</div>
+      </div>` : ''}
+    ${f[COL.auflagen] ? `
+      <div>
+        <div class="panel-field-label">Auflagen / Bedingungen</div>
+        <div class="panel-field-value pre" style="background:#fffbeb;padding:8px 10px;border-radius:7px;border:1px solid #fde68a">${esc(f[COL.auflagen])}</div>
+      </div>` : ''}`;
 
   const gremiumSection = isGremium ? `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
-      ${isDecided ? `
-        <div style="margin-bottom:12px">
-          ${statusBadge(f[COL.status])}
-          ${f[COL.freigabeDatum] ? `<span style="font-size:.8rem;color:#6b7280;margin-left:8px">📅 ${fmtDate(f[COL.freigabeDatum])}</span>` : ''}
+      ${isOwnAntrag ? `
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:.82rem;color:#92400e">
+          ℹ️ <strong>Eigener Antrag</strong> – du bist der Antragsteller und kannst diesen Antrag nicht selbst genehmigen.
         </div>
-        ${f[COL.gremiumKommentar] ? `
-          <div style="margin-bottom:10px">
-            <div class="panel-field-label">Begründung</div>
-            <div class="panel-field-value pre" style="background:#f9fafb;padding:8px 10px;border-radius:7px;border:1px solid #e5e9ef">${esc(f[COL.gremiumKommentar])}</div>
-          </div>` : ''}
-        ${f[COL.auflagen] ? `
-          <div>
-            <div class="panel-field-label">Auflagen / Bedingungen</div>
-            <div class="panel-field-value pre" style="background:#fffbeb;padding:8px 10px;border-radius:7px;border:1px solid #fde68a">${esc(f[COL.auflagen])}</div>
-          </div>` : ''}
+        ${decidedBlock}
+      ` : isDecided ? `
+        ${decidedBlock}
         <div style="margin-top:14px">
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Eingereicht')" title="Entscheidung zurücksetzen">↩ Zurücksetzen</button>
         </div>
@@ -903,7 +925,7 @@ function openAntragPanel(itemId) {
         ${showApprovalTracker ? `
         <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.82rem">
           <div style="font-weight:600;color:#15803d;margin-bottom:8px">⚖️ Einstimmig – Zustimmungsstand</div>
-          ${_genPanel.map(g => {
+          ${effectiveGenehmiger.map(g => {
             const approved = panelApprovals.includes(g.email.toLowerCase());
             return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
               <span style="color:${approved ? '#15803d' : '#9ca3af'};font-size:1rem">${approved ? '✓' : '○'}</span>
@@ -913,7 +935,7 @@ function openAntragPanel(itemId) {
         </div>` : ''}
         <div class="form-group">
           <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
-          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc((f[COL.gremiumKommentar] || '').replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim())}</textarea>
+          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(kommentarClean)}</textarea>
         </div>
         <div class="form-group">
           <label class="form-label">Auflagen / Bedingungen</label>
@@ -937,6 +959,16 @@ async function saveGremiumDecision(itemId, forceStatus) {
   const kommentar = $id('pg-kommentar')?.value?.trim() || '';
   const auflagen  = $id('pg-auflagen')?.value?.trim()  || '';
 
+  // Self-Approval-Guard: eigene Anträge können nicht selbst genehmigt/abgelehnt werden
+  const prevItemCheck = allAntraege.find(i => i.id == itemId);
+  const antragAuthorG = (prevItemCheck?.fields?.Author0EMail || '').toLowerCase();
+  const myEmailG      = (account?.username || '').toLowerCase();
+  if (myEmailG && antragAuthorG && myEmailG === antragAuthorG &&
+      (status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage')) {
+    showToast('Eigene Anträge können nicht selbst genehmigt werden.', 'error');
+    return;
+  }
+
   if ((status === 'Genehmigt' || status === 'Abgelehnt') && !kommentar) {
     showToast('Bitte eine Begründung eingeben bevor Sie ' + (status === 'Genehmigt' ? 'genehmigen' : 'ablehnen') + '.', 'error');
     $id('pg-kommentar')?.focus();
@@ -959,7 +991,9 @@ async function saveGremiumDecision(itemId, forceStatus) {
     const _stD = loadSettings();
     const modus = _stD.benachrichtigung?.genehmigungsmodus || 'einstimmig';
     if (modus === 'einstimmig') {
-      const _genD = _stD.genehmiger || [];
+      // Effektive Genehmiger: Antragsteller aus der Pflicht-Zustimmungsliste ausschließen
+      const _genDAll  = _stD.genehmiger || [];
+      const _genD     = _genDAll.filter(g => g.email.toLowerCase() !== antragAuthorG);
       if (_genD.length > 1) {
         const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
         const approvals  = parseApprovals(prevKomRaw);
@@ -970,7 +1004,6 @@ async function saveGremiumDecision(itemId, forceStatus) {
           // Noch nicht alle zugestimmt → Zwischenspeichern, Status auf 'In Prüfung' halten
           const appToken  = `[APPROVALS:${approvals.join('|')}]`;
           const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-          // Neuen Kommentar (aus Textarea) ebenfalls in das Log aufnehmen
           let partialKom = cleanBase;
           if (kommentar) {
             partialKom = cleanBase
@@ -984,10 +1017,32 @@ async function saveGremiumDecision(itemId, forceStatus) {
             const idx2 = allAntraege.findIndex(i => i.id == itemId);
             if (idx2 >= 0) Object.assign(allAntraege[idx2].fields, { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
           } catch(ePart) { console.warn('Einstimmig-PATCH fehlgeschlagen:', ePart.message); }
-          const remaining = _genD
-            .filter(g => !approvals.includes(g.email.toLowerCase()))
-            .map(g => g.name || g.email);
-          showToast(`✓ Deine Zustimmung gespeichert. Noch ausstehend: ${remaining.join(', ')}`);
+
+          const remaining = _genD.filter(g => !approvals.includes(g.email.toLowerCase()));
+          const remainingNames = remaining.map(g => g.name || g.email);
+          showToast(`✓ Deine Zustimmung gespeichert. Noch ausstehend: ${remainingNames.join(', ')}`);
+
+          // Verbleibende Genehmiger per Mail benachrichtigen (außer dem Antragsteller)
+          if (remaining.length && _stD.benachrichtigung?.beiEinreichung !== false) {
+            const antragTitle = prevItem?.fields?.Title || '';
+            const approverName = account?.name || account?.username || '';
+            sendMail(
+              remaining.map(g => ({ address: g.email, name: g.name })),
+              `[KI-Antrag] ${antragTitle} – Zustimmung ausstehend`,
+              mailTemplate(
+                'Zustimmung zu einem KI-Antrag ausstehend',
+                [
+                  ['KI-System',    antragTitle],
+                  ['Zugestimmt',   approverName],
+                  ['Ausstehend',   remainingNames.join(', ')],
+                  ['Datum',        new Date().toLocaleDateString('de-DE')],
+                ],
+                '✓ Jetzt zustimmen',
+                `${location.origin}${location.pathname}?antrag=${itemId}`
+              )
+            ).catch(e => console.warn('Genehmiger-Reminder fehlgeschlagen:', e.message));
+          }
+
           renderAntraege();
           updateOpenBadge();
           closePanel();
