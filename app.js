@@ -512,6 +512,138 @@ async function switchView(view) {
 // ═══════════════════════════════════════════════════════════════════
 // ANTRAG FORM
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// KI-RICHTLINIE MODAL (CO-10-01 – Entwurf Mai 2026)
+// ═══════════════════════════════════════════════════════════════════
+function openRichtlinieModal() {
+  $id('modal-title').textContent = 'KI-Richtlinie CO-10-01 – Nutzung von KI-Anwendungen (Entwurf)';
+  $id('modal-card').classList.add('modal-wide');
+  $id('modal-body').innerHTML = `
+<div class="rdoc">
+
+  <div class="rdoc-meta-table">
+    <table>
+      <tr><td>Nummerierung</td><td><strong>CO-10-01</strong></td><td>Kurzbezeichnung</td><td><strong>KI-Richtlinie</strong></td></tr>
+      <tr><td>Version</td><td>1.0 (Entwurf)</td><td>Verantwortlich</td><td>Chief Compliance Officer</td></tr>
+      <tr><td>Genehmiger</td><td colspan="3">Dr. Alex Lissitsa · Viktor Babushchak · Dr. Hans-Jürgen Brenninger · Robert Schüller</td></tr>
+      <tr><td>Geltungsbereich</td><td colspan="3">Geschäftsleitung, Führungskräfte, alle Mitarbeitenden der DIHAG-Gruppe</td></tr>
+      <tr><td>Übergeordnet</td><td colspan="3">CO-01-01 Code of Conduct</td></tr>
+    </table>
+  </div>
+
+  <h3>1 · Allgemeines, Geltungsbereich</h3>
+
+  <h4>1.1 Begriffsdefinitionen</h4>
+  <p>Die EU KI-Verordnung unterscheidet zwei wesentliche Begriffe:</p>
+  <ul>
+    <li><strong>KI-System</strong>: maschinengestütztes System, das autonom operiert, nach Inbetriebnahme anpassungsfähig sein kann und aus Eingaben Ausgaben (Vorhersagen, Inhalte, Empfehlungen, Entscheidungen) ableitet.</li>
+    <li><strong>KI-Modell mit allgemeinem Verwendungszweck (GPAI)</strong>: erhebliche allgemeine Verwendbarkeit, kann ein breites Aufgabenspektrum erfüllen und in viele Systeme integriert werden – betrifft u. a. große Sprachmodelle (LLM) wie ChatGPT.</li>
+  </ul>
+  <p><strong>Anbieter</strong>: Person/Unternehmen, das ein KI-System entwickelt und unter eigenem Namen in Verkehr bringt. Wenn DIHAG-Gruppe KI-Anwendungen vermarktet, gelten die strengeren Anbieter-Anforderungen.</p>
+  <p><strong>Betreiber</strong>: Person/Unternehmen, das ein KI-System zu geschäftlichen Zwecken einsetzt. Die DIHAG-Gruppe ist bei geschäftlichem Einsatz Betreiber und muss die Betreiber-Anforderungen erfüllen.</p>
+  <p><strong>Personenbezogene Daten</strong>: alle Informationen, die sich auf eine identifizierte oder identifizierbare natürliche Person beziehen (Namen, Adressen, E-Mails, IP-Adressen, Benutzerkennungen …).</p>
+  <p><strong>Geschäftsgeheimnisse</strong>: nicht offenkundige, einem begrenzten Personenkreis bekannte Tatsachen, an deren Geheimhaltung der Arbeitgeber ein berechtigtes wirtschaftliches Interesse hat.</p>
+
+  <h4>1.2 Zweck</h4>
+  <p>KI kann Arbeitsabläufe vereinfachen, birgt aber auch Risiken (Weiterverwendung von Eingaben, fehlerhafte Ausgaben). Diese Richtlinie regelt den Umgang mit KI-Systemen, gewährleistet die Einhaltung regulatorischer Anforderungen und minimiert Risiken unsachgemäßer Nutzung.</p>
+
+  <h4>1.3 Geltungsbereich</h4>
+  <p>DIHAG Holding GmbH und alle Tochtergesellschaften sowie Beteiligungsunternehmen, bei denen DIHAG &gt; 50 % der Anteile oder Stimmrechte hält bzw. beherrschenden Einfluss hat.</p>
+
+  <h3>2 · Regulatorisches Umfeld</h3>
+
+  <h4>2.1 EU KI-Verordnung (in Kraft seit 01.08.2024)</h4>
+  <p>Risikobasierter Ansatz:</p>
+  <ul>
+    <li><span class="rdoc-badge rdoc-gering">Minimales Risiko</span> – z. B. Spamfilter, KI-Videospiele: keine besonderen Verpflichtungen.</li>
+    <li><span class="rdoc-badge rdoc-normal">Transparenzpflichten</span> – Chatbots müssen als Maschine erkennbar sein; KI-erzeugte Inhalte sind zu kennzeichnen.</li>
+    <li><span class="rdoc-badge rdoc-hoch">Hohes Risiko</span> – z. B. KI-Medizinsoftware, Personalrekrutierung: strenge Anforderungen (Risikominderung, Datensätze, menschliche Aufsicht).</li>
+    <li><span class="rdoc-badge rdoc-verboten">Verboten</span> – Social Scoring, manipulative KI, biometrische Massenüberwachung in der Öffentlichkeit.</li>
+  </ul>
+  <p><strong>Wichtige Termine:</strong></p>
+  <ul>
+    <li>ab 02.02.2025: KI-Kompetenz im Unternehmen &amp; Verbot bestimmter KI-Anwendungen</li>
+    <li>ab August 2025: Bestimmungen für Anbieter von GPAI-Modellen</li>
+    <li>ab August 2026: Bestimmungen für Betreiber von GPAI-Modellen</li>
+  </ul>
+
+  <h4>2.2 Datenschutz</h4>
+  <p>Bei Verarbeitung personenbezogener Daten in KI-Systemen sind DS-GVO und BDSG einzuhalten. Verantwortlich: betrieblicher Datenschutzbeauftragter.</p>
+
+  <h4>2.3 Geschäftsgeheimnisse</h4>
+  <p>Vertrauliche Informationen dürfen nur im zulässigen Rahmen in KI-Systemen verwendet werden. Verantwortlich: jeweilige Fachabteilung (ggf. Unterstützung durch CCO).</p>
+
+  <h3>3 · Verwendung von KI-Anwendungen bei der DIHAG-Gruppe</h3>
+
+  <h4>3.1 Grundsätze zum Einsatz von KI</h4>
+  <p>Die DIHAG-Gruppe unterstützt grundsätzlich den Einsatz von KI-Systemen für geschäftliche Zwecke. Diese Richtlinie gibt einen Orientierungsrahmen für eine funktionale, ethische und rechtskonforme Nutzung. Die Richtlinie wird regelmäßig evaluiert und bei Bedarf aktualisiert.</p>
+
+  <h4>3.2 KI-Koordinierungsgremium</h4>
+  <p>Das <strong>KI-Koordinierungsgremium</strong> begleitet die Einführung und Verwendung von KI. Es besteht aus verantwortlichen Vertretern der Bereiche <em>Compliance, Datenschutz, IT und Legal</em> und wird durch die Leiterin Legal geleitet.</p>
+
+  <h4>3.3 Antrag, Genehmigung, Zweck <span class="rdoc-highlight">← relevant für diesen Antrag</span></h4>
+  <p><strong>KI-Systeme dürfen nur nach vorheriger Freigabe durch das KI-Koordinierungsgremium eingesetzt werden.</strong></p>
+  <p>Geplante KI-Systeme werden von der Fachabteilung mit dem <em>Antrag zur Freigabe eines KI-Systems</em> (Anlage 1) beschrieben und dem Gremium frühzeitig vorgelegt. Das Gremium prüft die Risikokategorie, gibt die Anwendung frei und legt Rahmenbedingungen fest.</p>
+  <p>Bereits freigegebene Systeme sind im Intranet zu finden. Bei der Nutzung sind deren Nutzungsbedingungen und Zweckbestimmungen zu beachten.</p>
+
+  <h4>3.4 Verwendung von Trainingsdaten</h4>
+  <p>Auch die Verwendung von Trainingsdaten bedarf der Genehmigung des KI-Koordinierungsgremiums. Personenbezogene Daten dürfen nur mit entsprechender Rechtsgrundlage verwendet werden.</p>
+
+  <h4>3.5 Mitbestimmung</h4>
+  <p>Der Konzernbetriebsrat ist frühzeitig einzubinden, sofern Mitbestimmungstatbestände nach BetrVG erfüllt sind.</p>
+
+  <h4>3.6 Grundsätze für den Umgang mit KI-erzeugten Daten</h4>
+  <ul>
+    <li>Verantwortung für KI-Ausgaben trägt die Person, die die Daten eingibt.</li>
+    <li>Ausgaben sind stets kritisch auf Korrektheit zu prüfen; im Zweifel 4-Augen-Prinzip.</li>
+    <li>Keine automatisierten Entscheidungen über Personen ohne menschliche Prüfung.</li>
+    <li>KI-erzeugte Texte, Dokumente oder Bilder sind als solche zu kennzeichnen.</li>
+    <li>Keine rechtswidrige oder ethisch unzulässige Nutzung (Manipulation, Diskriminierung, Überwachung ohne Rechtsgrundlage).</li>
+    <li>Auffällige Feststellungen (z. B. Halluzinationen) unverzüglich der zuständigen Stelle melden.</li>
+  </ul>
+
+  <h4>3.7 KI-Kompetenz &amp; Schulungen</h4>
+  <p>Betreiber sind gesetzlich verpflichtet (Art. 4 EU KI-VO), sicherzustellen, dass ihr Personal über ausreichende KI-Kompetenz verfügt. Schulungsmaßnahmen werden vom KI-Koordinierungsgremium koordiniert und im Steckbrief festgehalten. DIHAG bildet einen <strong>Key User</strong> aus, der kompetenzvermittelnde Maßnahmen weitergibt.</p>
+
+  <h4>3.8 Software mit KI-Bausteinen</h4>
+  <p>Bei Beschaffung und Einsatz sonstiger Software, die KI-Bausteine enthält (z. B. CRM- oder ERP-Systeme), ist das KI-Koordinierungsgremium einzubinden.</p>
+
+  <h4>3.9 Freie KI-Anwendungen / Open Source</h4>
+  <p class="rdoc-warning">⚠ Die Nutzung freier KI-Anwendungen ist grundsätzlich <strong>verboten</strong>!</p>
+
+  <h3>4 · Verstoß gegen die Richtlinie</h3>
+  <p>Verstöße können arbeits-, zivil- und ggf. strafrechtliche Konsequenzen nach sich ziehen. Sanktionen richten sich nach Schwere, Häufigkeit und Vorsatz. Bei Zweifeln an der Zulässigkeit sind Mitarbeitende verpflichtet, vorab <em>Datenschutz, IT oder Compliance</em> zu konsultieren. Eine frühzeitige Meldung wirkt sanktionsmildernd.</p>
+
+  <h3>Anlage 1 · Felder des Antragsformulars (Referenz)</h3>
+  <table class="rdoc-anlage">
+    <thead><tr><th>Feld</th><th>Erläuterung</th></tr></thead>
+    <tbody>
+      <tr><td>Bezeichnung des KI-Systems</td><td>Interne Bezeichnung des KI-Use-Case bzw. der Software</td></tr>
+      <tr><td>Verantwortliche Stelle</td><td>Wer verantwortet die geplante Lösung im Betrieb?</td></tr>
+      <tr><td>Hersteller / Entwickler</td><td>Bezugsquelle, Dienstleister oder Lieferant des KI-Systems</td></tr>
+      <tr><td>KI-Komponente(n)</td><td>Beschreibung der Funktionen, integrierten KI-Modelle und Verfahren</td></tr>
+      <tr><td>Verwendungszweck laut Hersteller</td><td>Wie definiert der Hersteller den Zweck? (Nutzungsbedingungen, Dokumentation)</td></tr>
+      <tr><td>Anwendungsbereich im Unternehmen</td><td>Zu welchem Zweck intern einsetzen? Abweichung vom Herstellerzweck?</td></tr>
+      <tr><td>Risikokategorie</td><td>Geringes · Normales · Hohes Risiko · Verboten – mit Begründung gemäß EU AI Act</td></tr>
+      <tr><td>Nutzungsart</td><td>Nur intern oder auch externes Angebot / Vermarktung? (Abgrenzung Betreiber/Anbieter)</td></tr>
+      <tr><td>Geplanter Einsatz ab</td><td>Zeitplan für den Einsatz des KI-Systems</td></tr>
+      <tr><td>Key User / Schulungsmaßnahme</td><td>Wer ist Key User? Welche kompetenzvermittelnden Maßnahmen sind geplant?</td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top:20px;font-size:.78rem;color:#9ca3af;border-top:1px solid #e5e9ef;padding-top:12px">
+    Entwurf Stand 05.05.2026 · Ansprechpartner: Karl Würz, ext. Chief Compliance Officer (wuerz@dihag.com)
+  </p>
+</div>`;
+  $id('modal-overlay').classList.remove('hidden');
+}
+
+function closeModal(e) {
+  if (e && e.target !== $id('modal-overlay')) return;
+  $id('modal-overlay').classList.add('hidden');
+  $id('modal-card').classList.remove('modal-wide');
+}
+
 function renderAntragForm() {
   let html = '';
   let inSection = false;
@@ -2134,10 +2266,7 @@ function closePanel() {
   $id('panel-overlay').classList.add('hidden');
   $id('side-panel').classList.add('hidden');
 }
-function closeModal(e) {
-  if (e && e.target !== $id('modal-overlay')) return;
-  $id('modal-overlay').classList.add('hidden');
-}
+// closeModal is defined above (next to openRichtlinieModal) to support modal-wide cleanup
 
 // ═══════════════════════════════════════════════════════════════════
 // E-MAIL VIA GRAPH (Mail.Send)

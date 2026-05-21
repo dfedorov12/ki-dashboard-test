@@ -69,6 +69,16 @@
         <h2>KI-Antrag einreichen</h2>
         <p class="view-desc">Antrag zur Freigabe eines KI-Systems gemäß Anlage 1 der KI-Richtlinie (CO-10-01). Das KI-Koordinierungsgremium prüft und entscheidet über die Freigabe.</p>
       </div>
+      <div class="richtlinie-hint">
+        <div class="richtlinie-hint-left">
+          <span class="richtlinie-hint-icon">📋</span>
+          <div>
+            <strong>KI-Richtlinie CO-10-01</strong>
+            <span>Bitte füllen Sie den Antrag gemäß der geltenden DIHAG-KI-Richtlinie aus.</span>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openRichtlinieModal()">Richtlinie lesen →</button>
+      </div>
       <div id="antrag-success" class="success-banner hidden"></div>
       <form id="form-antrag" class="form-card" onsubmit="submitAntrag(event)" novalidate>
         <div id="form-antrag-fields"></div>
