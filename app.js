@@ -1031,7 +1031,7 @@ function openAntragPanel(itemId) {
   // Effektive Genehmiger = konfigurierte Liste ohne den Antragsteller (darf nicht selbst zustimmen)
   const effectiveGenehmiger  = _genPanel.filter(g => g.email.toLowerCase() !== antragAuthorEmail);
   const myApprovedAlready    = panelApprovals.includes(myEmailPanel);
-  const showApprovalTracker  = !isDecided && !isOwnAntrag && einstimmig && effectiveGenehmiger.length > 1;
+  const showApprovalTracker  = !isDecided && !isOwnAntrag && einstimmig && effectiveGenehmiger.length >= 1;
 
   // Wiederverwendbarer Read-Only-Block (entschieden oder eigener Antrag)
   const decidedBlock = `
@@ -1081,7 +1081,7 @@ function openAntragPanel(itemId) {
           }).join('')}
         </div>` : ''}
         <div class="form-group">
-          <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(Pflichtfeld bei Genehmigung/Ablehnung)</span></label>
+          <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(optional)</span></label>
           <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(kommentarClean)}</textarea>
         </div>
         <div class="form-group">
@@ -1136,11 +1136,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
     return;
   }
 
-  if ((status === 'Genehmigt' || status === 'Abgelehnt') && !kommentar) {
-    showToast('Bitte eine Begründung eingeben bevor Sie ' + (status === 'Genehmigt' ? 'genehmigen' : 'ablehnen') + '.', 'error');
-    $id('pg-kommentar')?.focus();
-    return;
-  }
+
 
   const prevItem = allAntraege.find(i => i.id == itemId);
   const prevKommentar = prevItem?.fields?.[COL.gremiumKommentar] || '';
@@ -1161,7 +1157,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
       // Effektive Genehmiger: Antragsteller aus der Pflicht-Zustimmungsliste ausschließen
       const _genDAll  = _stD.genehmiger || [];
       const _genD     = _genDAll.filter(g => g.email.toLowerCase() !== antragAuthorG);
-      if (_genD.length > 1) {
+      if (_genD.length >= 1) {
         const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
         const approvals  = parseApprovals(prevKomRaw);
         const myEmailD   = (account?.username || '').toLowerCase();
@@ -2544,11 +2540,6 @@ function renderEinstellungen() {
           <input type="checkbox" id="notif-entscheidung" ${ben.beiEntscheidung !== false ? 'checked' : ''}>
           <span>Nach Gremium-Entscheidung → Antragsteller automatisch benachrichtigen</span>
         </label>
-        <div style="margin-top:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;font-size:.8rem;color:#1d4ed8;line-height:1.5">
-          💡 <strong>Hinweis IT-Admin:</strong> In der Azure AD App-Registrierung muss unter
-          „API-Berechtigungen" → Microsoft Graph → <strong>Mail.Send</strong> (delegiert) hinzugefügt
-          und vom Admin genehmigt werden.
-        </div>
       </div>
 
     </div>
