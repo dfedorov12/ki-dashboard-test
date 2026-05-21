@@ -466,3 +466,45 @@ tbody td { padding: 10px 14px; color: #1e2939; vertical-align: middle; }
 }
 .rdoc-anlage tr:nth-child(even) td { background: #f9fafb; }
 .rdoc-anlage td:first-child { font-weight: 500; white-space: nowrap; color: #1e2939; width: 40%; }
+
+/* ─── ANHÄNGE ───────────────────────────────────────────────────── */
+.att-list {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; min-height: 24px;
+}
+.att-item {
+  display: flex; align-items: center; gap: 8px;
+  background: #f9fafb; border: 1px solid #e5e9ef;
+  border-radius: 7px; padding: 7px 10px;
+}
+.att-name {
+  flex: 1; font-size: .83rem; color: #1a56db; text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.att-name:hover { text-decoration: underline; }
+.att-del {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  color: #ef4444; font-size: .85rem; padding: 2px 6px; border-radius: 5px;
+  line-height: 1; transition: background .15s;
+}
+.att-del:hover { background: #fef2f2; }
+.att-drop {
+  border: 2px dashed #d1d5db; border-radius: 10px;
+  padding: 18px 14px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  color: #6b7280; font-size: .82rem; transition: border-color .2s, background .2s;
+  cursor: default;
+}
+.att-drop.drag-over {
+  border-color: #1a56db; background: #eff6ff; color: #1d4ed8;
+}
+.att-drop.att-uploading {
+  border-color: #fbbf24; background: #fffbeb; color: #92400e; pointer-events: none;
+}
+.att-drop-icon { font-size: 1.4rem; }
+.att-drop-btn {
+  display: inline-block; padding: 4px 12px;
+  background: #1a56db; color: #fff; border-radius: 6px;
+  font-size: .78rem; font-weight: 600; cursor: pointer;
+  transition: background .15s;
+}
+.att-drop-btn:hover { background: #1648c5; }

@@ -66,6 +66,16 @@ const COL = {
 
 const STATUS_OPTS = ['Eingereicht', 'In Prüfung', 'Genehmigt', 'Abgelehnt', 'Rückfrage'];
 
+const ANLAGE_ROLLEN = ['Legal', 'Datenschutz', 'Compliance', 'IT', 'User', 'Sonstiges'];
+const ROLLE_COLORS = {
+  'Legal':      { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
+  'Datenschutz':{ bg: '#fdf4ff', color: '#7e22ce', border: '#e9d5ff' },
+  'Compliance': { bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
+  'IT':         { bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+  'User':       { bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' },
+  'Sonstiges':  { bg: '#f9fafb', color: '#374151', border: '#e5e7eb' },
+};
+
 const ANTRAG_FIELDS = [
   { section: 'Grunddaten' },
   { key: 'Title',                        label: 'Bezeichnung des KI-Systems',        type: 'text',    req: true,
@@ -1059,9 +1069,14 @@ function openAntragPanel(itemId) {
           <div style="font-weight:600;color:#15803d;margin-bottom:8px">⚖️ Einstimmig – Zustimmungsstand</div>
           ${effectiveGenehmiger.map(g => {
             const approved = panelApprovals.includes(g.email.toLowerCase());
+            const rc2 = ROLLE_COLORS[g.rolle] || null;
+            const rolleBadge2 = g.rolle && rc2
+              ? `<span style="font-size:.65rem;font-weight:600;padding:1px 7px;border-radius:20px;background:${rc2.bg};color:${rc2.color};border:1px solid ${rc2.border}">${esc(g.rolle)}</span>`
+              : '';
             return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
               <span style="color:${approved ? '#15803d' : '#9ca3af'};font-size:1rem">${approved ? '✓' : '○'}</span>
               <span style="${approved ? 'color:#15803d;font-weight:500' : 'color:#6b7280'}">${esc(g.name || g.email)}</span>
+              ${rolleBadge2}
             </div>`;
           }).join('')}
         </div>` : ''}
@@ -1082,8 +1097,28 @@ function openAntragPanel(itemId) {
       `}
     </div>` : '';
 
-  $id('panel-body').innerHTML = rows1 + statusSection + rueckfrageSection + gremiumSection;
+  // Anhänge-Platzhalter (wird async befüllt)
+  const attachSection = `
+    <div class="panel-section" id="panel-attachments">
+      <div class="panel-section-title">📎 Anhänge</div>
+      <div id="att-list" class="att-list"><span style="color:#9ca3af;font-size:.8rem">Lade Anhänge…</span></div>
+      ${isGremium ? `
+        <div id="att-drop" class="att-drop" ondragover="attDragOver(event)" ondragleave="attDragLeave(event)" ondrop="attDrop(event,${item.id})">
+          <span class="att-drop-icon">📁</span>
+          <span>Datei hierher ziehen oder</span>
+          <label class="att-drop-btn">
+            Datei auswählen
+            <input type="file" id="att-file-input" multiple style="display:none" onchange="attFileSelect(event,${item.id})">
+          </label>
+        </div>
+      ` : ''}
+    </div>`;
+
+  $id('panel-body').innerHTML = rows1 + statusSection + rueckfrageSection + gremiumSection + attachSection;
   openPanel();
+
+  // Anhänge asynchron nachladen (ohne await – kein Blockieren)
+  renderAttachments(item.id);
 }
 
 async function saveGremiumDecision(itemId, forceStatus) {
@@ -2429,14 +2464,29 @@ function renderEinstellungen() {
   const ben = settings.benachrichtigung || {};
 
   const genList = genehmiger.length
-    ? genehmiger.map((g, i) => `
+    ? genehmiger.map((g, i) => {
+        const rc = ROLLE_COLORS[g.rolle] || ROLLE_COLORS['Sonstiges'];
+        const rolleBadge = g.rolle
+          ? `<span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:20px;background:${rc.bg};color:${rc.color};border:1px solid ${rc.border}">${esc(g.rolle)}</span>`
+          : '';
+        const rolleOpts = ANLAGE_ROLLEN.map(r =>
+          `<option value="${r}" ${g.rolle === r ? 'selected' : ''}>${r}</option>`).join('');
+        return `
         <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f9fafb;border-radius:8px;margin-bottom:6px">
           <div style="flex:1;min-width:0">
-            <div style="font-size:.875rem;font-weight:600">${esc(g.name || g.email)}</div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:.875rem;font-weight:600">${esc(g.name || g.email)}</span>
+              ${rolleBadge}
+            </div>
             ${g.name && g.name !== g.email ? `<div style="font-size:.75rem;color:#9ca3af">${esc(g.email)}</div>` : ''}
           </div>
+          <select class="filter-select" style="font-size:.75rem;padding:3px 6px;height:auto" onchange="updateGenehmigerRolle(${i}, this.value)">
+            <option value="">Rolle…</option>
+            ${rolleOpts}
+          </select>
           <button class="btn btn-neutral btn-sm" onclick="removeGenehmiger(${i})">Entfernen</button>
-        </div>`).join('')
+        </div>`;
+      }).join('')
     : `<div class="empty-state" style="padding:16px 10px;font-size:.82rem">Noch keine Genehmiger hinterlegt.</div>`;
 
   $id('einstellungen-body').innerHTML = `
@@ -2448,7 +2498,7 @@ function renderEinstellungen() {
           Personen, die KI-Anträge prüfen und entscheiden. Bei neuen Anträgen kann ein vorausgefüllter E-Mail-Entwurf geöffnet werden.
         </p>
         <div id="gen-list">${genList}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:12px;align-items:end">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;margin-top:12px;align-items:end">
           <div>
             <label class="form-label">Name</label>
             <input id="new-gen-name" type="text" class="form-control" placeholder="Max Mustermann">
@@ -2457,7 +2507,14 @@ function renderEinstellungen() {
             <label class="form-label">E-Mail</label>
             <input id="new-gen-email" type="email" class="form-control" placeholder="max@dihag.com">
           </div>
-          <button class="btn btn-primary btn-sm" onclick="addGenehmiger()" style="white-space:nowrap">+ Hinzufügen</button>
+          <div>
+            <label class="form-label">Rolle</label>
+            <select id="new-gen-rolle" class="form-control">
+              <option value="">– Keine –</option>
+              ${ANLAGE_ROLLEN.map(r => `<option value="${r}">${r}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="addGenehmiger()" style="white-space:nowrap;margin-bottom:1px">+ Hinzufügen</button>
         </div>
         <div style="margin-top:18px;padding-top:16px;border-top:1px solid #e5e9ef">
           <div style="font-size:.82rem;font-weight:600;color:#374151;margin-bottom:10px">⚖️ Genehmigungsmodus</div>
@@ -2521,17 +2578,30 @@ function saveSettings() {
 function addGenehmiger() {
   const name  = $id('new-gen-name')?.value.trim();
   const email = $id('new-gen-email')?.value.trim();
+  const rolle = $id('new-gen-rolle')?.value || '';
   if (!email) { showToast('Bitte E-Mail-Adresse eingeben.', 'error'); return; }
   const settings  = loadSettings();
   const list      = settings.genehmiger || [];
   if (list.some(g => g.email.toLowerCase() === email.toLowerCase())) {
     showToast('Diese E-Mail-Adresse ist bereits hinterlegt.', 'error'); return;
   }
-  list.push({ name: name || email, email });
+  list.push({ name: name || email, email, rolle: rolle || '' });
   settings.genehmiger = list;
   saveSettingsData(settings);
   renderEinstellungen();
   showToast(`✓ ${name || email} als Genehmiger hinzugefügt.`);
+}
+
+function updateGenehmigerRolle(index, rolle) {
+  const settings = loadSettings();
+  const list = settings.genehmiger || [];
+  if (list[index]) {
+    list[index].rolle = rolle;
+    settings.genehmiger = list;
+    saveSettingsData(settings);
+    renderEinstellungen();
+    showToast(`✓ Rolle aktualisiert.`);
+  }
 }
 
 function removeGenehmiger(index) {
@@ -2542,4 +2612,140 @@ function removeGenehmiger(index) {
   saveSettingsData(settings);
   renderEinstellungen();
   if (removed) showToast(`${removed.name || removed.email} entfernt.`, 'info');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ANHÄNGE — SharePoint REST (/_api/web/lists/.../items/{id}/AttachmentFiles)
+// ═══════════════════════════════════════════════════════════════════
+
+async function spAttachFetch(url, options = {}) {
+  const token = await tryGetSpToken();
+  if (!token) throw new Error('SP-Token nicht verfügbar');
+  const headers = {
+    'Accept': 'application/json;odata=verbose',
+    'Authorization': `Bearer ${token}`,
+    ...(options.headers || {}),
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`SP ${res.status}: ${err.slice(0, 200)}`);
+  }
+  if (res.status === 200) {
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('json')) return res.json();
+    return res.arrayBuffer();
+  }
+  return null;
+}
+
+async function listAttachments(itemId) {
+  const url = `https://${SP_HOST}${SP_SITE_PATH}/_api/web/lists/getbytitle('${LIST_ANTRAEGE}')/items(${itemId})/AttachmentFiles`;
+  const data = await spAttachFetch(url);
+  return (data?.d?.results || []);
+}
+
+async function uploadAttachment(itemId, file) {
+  const safeName = file.name.replace(/[#%&{}\\<>*?/$!'":@+`|=]/g, '_');
+  const url = `https://${SP_HOST}${SP_SITE_PATH}/_api/web/lists/getbytitle('${LIST_ANTRAEGE}')/items(${itemId})/AttachmentFiles/add(FileName='${encodeURIComponent(safeName)}')`;
+  const buf = await file.arrayBuffer();
+  await spAttachFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: buf,
+  });
+}
+
+async function deleteAttachment(itemId, fileName) {
+  const url = `https://${SP_HOST}${SP_SITE_PATH}/_api/web/lists/getbytitle('${LIST_ANTRAEGE}')/items(${itemId})/AttachmentFiles/getbyfilename('${encodeURIComponent(fileName)}')`;
+  const token = await tryGetSpToken();
+  if (!token) throw new Error('SP-Token nicht verfügbar');
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json;odata=verbose',
+      'IF-MATCH': '*',
+      'X-HTTP-Method': 'DELETE',
+    },
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`SP ${res.status}`);
+}
+
+async function renderAttachments(itemId) {
+  const listEl = $id('att-list');
+  if (!listEl) return;
+  try {
+    const files = await listAttachments(itemId);
+    if (!files.length) {
+      listEl.innerHTML = `<span style="color:#9ca3af;font-size:.8rem">Keine Anhänge vorhanden.</span>`;
+      return;
+    }
+    listEl.innerHTML = files.map(att => {
+      const fname = att.FileName || att.d?.FileName || 'Datei';
+      const url = att.ServerRelativeUrl
+        ? `https://${SP_HOST}${att.ServerRelativeUrl}`
+        : (att.d?.ServerRelativeUrl ? `https://${SP_HOST}${att.d.ServerRelativeUrl}` : '#');
+      const isGrem = isGremium;
+      return `<div class="att-item">
+        <a class="att-name" href="${esc(url)}" target="_blank" rel="noopener">📄 ${esc(fname)}</a>
+        ${isGrem ? `<button class="att-del" onclick="attDelete(${itemId},'${esc(fname.replace(/'/g, "\\'"))}')">✕</button>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    listEl.innerHTML = `<span style="color:#ef4444;font-size:.8rem">Fehler beim Laden: ${esc(e.message)}</span>`;
+    console.warn('Anhänge laden fehlgeschlagen:', e);
+  }
+}
+
+async function attDelete(itemId, fileName) {
+  if (!confirm(`Anhang „${fileName}" wirklich löschen?`)) return;
+  try {
+    await deleteAttachment(itemId, fileName);
+    showToast(`✓ „${fileName}" gelöscht.`);
+    await renderAttachments(itemId);
+  } catch(e) {
+    showToast(`Fehler beim Löschen: ${e.message}`, 'error');
+  }
+}
+
+async function attUploadFiles(itemId, files) {
+  if (!files || !files.length) return;
+  const MAX_MB = 50;
+  const dropEl = $id('att-drop');
+  if (dropEl) dropEl.classList.add('att-uploading');
+  let uploaded = 0, failed = 0;
+  for (const file of files) {
+    if (file.size > MAX_MB * 1024 * 1024) {
+      showToast(`„${file.name}" ist zu groß (max. ${MAX_MB} MB).`, 'error'); failed++; continue;
+    }
+    try {
+      await uploadAttachment(itemId, file);
+      uploaded++;
+    } catch(e) {
+      showToast(`Fehler bei „${file.name}": ${e.message}`, 'error'); failed++;
+    }
+  }
+  if (dropEl) dropEl.classList.remove('att-uploading');
+  if (uploaded) showToast(`✓ ${uploaded} Datei${uploaded > 1 ? 'en' : ''} hochgeladen.`);
+  await renderAttachments(itemId);
+}
+
+function attDragOver(e) {
+  e.preventDefault();
+  $id('att-drop')?.classList.add('drag-over');
+}
+function attDragLeave(e) {
+  $id('att-drop')?.classList.remove('drag-over');
+}
+function attDrop(e, itemId) {
+  e.preventDefault();
+  $id('att-drop')?.classList.remove('drag-over');
+  const files = [...(e.dataTransfer?.files || [])];
+  if (files.length) attUploadFiles(itemId, files);
+}
+function attFileSelect(e, itemId) {
+  const files = [...(e.target?.files || [])];
+  if (files.length) attUploadFiles(itemId, files);
+  if (e.target) e.target.value = '';
 }
