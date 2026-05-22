@@ -128,6 +128,8 @@ const LIZENZ_FIELDS = [
 let msalInstance, account;
 let siteId, listAntragId, listLizenzId, listRegisterId;
 let isGremium = false;
+let isAdmin   = false;   // Nur administrator@dihag.com → Einstellungen-Tab
+const ADMIN_UPN = 'administrator@dihag.com';
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antraege';
 let editLizenzId = null;
@@ -457,12 +459,17 @@ async function boot() {
     const uName = account?.name || account?.username || '';
     $id('user-name').textContent = uName;
 
-    // Tabs: Lizenzen + Einstellungen nur für Gremium, Register nur wenn Liste bekannt
+    // Admin-Flag: nur administrator@dihag.com darf Einstellungen sehen
+    isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
+
+    // Tabs: Lizenzen nur für Gremium; Einstellungen nur für Admin
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
-      $id('tab-einstellungen').style.display = '';
     } else {
       document.querySelector('[data-view="lizenzen"]').style.display = 'none';
+    }
+    if (isAdmin) {
+      $id('tab-einstellungen').style.display = '';
     }
     if (!listRegisterId) {
       document.querySelector('[data-view="register"]').style.display = 'none';
@@ -1795,7 +1802,7 @@ function openLizenzModal(itemId) {
   html += `<div class="modal-footer">
     ${itemId ? `<button class="btn btn-danger btn-sm" onclick="deleteLizenz(${itemId})">Löschen</button><span style="flex:1"></span>` : ''}
     <button class="btn btn-neutral btn-sm" onclick="closeModal()">Abbrechen</button>
-    <button class="btn btn-primary btn-sm" onclick="saveLizenz()">Speichern</button>
+    <button class="btn btn-primary btn-sm" id="lizenz-save-btn" onclick="saveLizenz()">Speichern</button>
   </div>`;
 
   $id('modal-body').innerHTML = html;
@@ -1818,11 +1825,20 @@ function hideLizenzError() { $id('lizenz-save-err')?.remove(); }
 
 async function saveLizenz() {
   hideLizenzError();
+  const saveBtn = $id('lizenz-save-btn');
+  const setBusy = busy => {
+    if (!saveBtn) return;
+    saveBtn.disabled = busy;
+    saveBtn.textContent = busy ? '⏳ Speichern…' : 'Speichern';
+  };
+  setBusy(true);
+
   const kiSysEl  = $id(`lf-${COL.kiSystem}`);
   const kiSysVal = kiSysEl?.value.trim();
   if (!kiSysVal) {
     showLizenzError('Bitte KI-System eingeben.');
     kiSysEl?.focus();
+    setBusy(false);
     return;
   }
 
@@ -1834,6 +1850,7 @@ async function saveLizenz() {
     if (dup) {
       showLizenzError(`Ein KI-System mit dem Namen „${kiSysVal}" existiert bereits.`);
       kiSysEl?.focus();
+      setBusy(false);
       return;
     }
   }
@@ -1962,6 +1979,7 @@ async function saveLizenz() {
   } catch(e) {
     showLizenzError('Speichern fehlgeschlagen: ' + e.message);
     console.error('saveLizenz:', e);
+    setBusy(false);
   }
 }
 
@@ -2474,7 +2492,7 @@ function renderEinstellungen() {
               <span style="font-size:.875rem;font-weight:600">${esc(g.name || g.email)}</span>
               ${rolleBadge}
             </div>
-            ${g.name && g.name !== g.email ? `<div style="font-size:.75rem;color:#9ca3af">${esc(g.email)}</div>` : ''}
+            <div style="font-size:.75rem;color:#9ca3af"><span style="font-size:.68rem;font-weight:600;color:#d1d5db;text-transform:uppercase;letter-spacing:.3px">UPN </span>${esc(g.email)}</div>
           </div>
           <select class="filter-select" style="font-size:.75rem;padding:3px 6px;height:auto" onchange="updateGenehmigerRolle(${i}, this.value)">
             <option value="">Rolle…</option>
@@ -2496,11 +2514,11 @@ function renderEinstellungen() {
         <div id="gen-list">${genList}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;margin-top:12px;align-items:end">
           <div>
-            <label class="form-label">Name</label>
+            <label class="form-label">Anzeigename <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
             <input id="new-gen-name" type="text" class="form-control" placeholder="Max Mustermann">
           </div>
           <div>
-            <label class="form-label">E-Mail</label>
+            <label class="form-label">UPN <span style="color:#6b7280;font-weight:400;font-size:.72rem">(Azure-Anmelde-E-Mail)</span></label>
             <input id="new-gen-email" type="email" class="form-control" placeholder="max@dihag.com">
           </div>
           <div>
@@ -2511,6 +2529,9 @@ function renderEinstellungen() {
             </select>
           </div>
           <button class="btn btn-primary btn-sm" onclick="addGenehmiger()" style="white-space:nowrap;margin-bottom:1px">+ Hinzufügen</button>
+        </div>
+        <div style="margin-top:8px;font-size:.75rem;color:#6b7280;line-height:1.4">
+          ℹ️ Es werden ausschließlich UPN und Rolle gespeichert — kein E-Mail-Verlauf, keine Kommunikationsdaten.
         </div>
         <div style="margin-top:18px;padding-top:16px;border-top:1px solid #e5e9ef">
           <div style="font-size:.82rem;font-weight:600;color:#374151;margin-bottom:10px">⚖️ Genehmigungsmodus</div>
