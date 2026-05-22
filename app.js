@@ -66,7 +66,9 @@ const COL = {
 
 const STATUS_OPTS = ['Eingereicht', 'In Prüfung', 'Genehmigt', 'Abgelehnt', 'Rückfrage'];
 
-const ANLAGE_ROLLEN = ['Legal', 'Datenschutz', 'Compliance', 'IT', 'User', 'Sonstiges'];
+const ANLAGE_ROLLEN  = ['Legal', 'Datenschutz', 'Compliance', 'IT', 'User', 'Sonstiges'];
+// Interner Konfigurationseintrag in KI_Antraege (wird in allen Listenansichten ausgeblendet)
+const SP_CONFIG_TITLE = '__KI_CFG__';
 const ROLLE_COLORS = {
   'Legal':      { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
   'Datenschutz':{ bg: '#fdf4ff', color: '#7e22ce', border: '#e9d5ff' },
@@ -127,9 +129,10 @@ const LIZENZ_FIELDS = [
 // ═══════════════════════════════════════════════════════════════════
 let msalInstance, account;
 let siteId, listAntragId, listLizenzId, listRegisterId;
-let isGremium = false;
-let isAdmin   = false;   // Nur administrator@dihag.com → Einstellungen-Tab
-const ADMIN_UPN = 'administrator@dihag.com';
+let isGremium       = false;
+let canReadLizenzen = false;  // Fallback-Flag: SP-Lizenzen lesbar (für leere Settings)
+let isAdmin         = false;  // Nur administrator@dihag.com → Einstellungen-Tab
+const ADMIN_UPN     = 'administrator@dihag.com';
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antraege';
 let editLizenzId = null;
@@ -376,8 +379,8 @@ async function boot() {
         console.log('✓ KI_Lizenzen:', lL.displayName, listLizenzId);
         try {
           await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$top=1`);
-          isGremium = true;
-          console.log('✓ Gremium-Zugriff bestätigt');
+          canReadLizenzen = true;
+          console.log('✓ KI_Lizenzen lesbar');
 
           try {
             const lizColData = await gGet(`/sites/${siteId}/lists/${listLizenzId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
@@ -453,14 +456,47 @@ async function boot() {
       })(),
     ]);
 
+    // ── SP-Konfiguration laden (Genehmiger-Liste, browserübergreifend) ──
+    // Wird in KI_Antraege als verstecktes Item gespeichert (Title = SP_CONFIG_TITLE)
+    try {
+      const cfgData = await gGet(
+        `/sites/${siteId}/lists/${listAntragId}/items` +
+        `?$expand=fields($select=Title,${COL.gremiumKommentar})` +
+        `&$filter=fields/Title eq '${SP_CONFIG_TITLE}'&$top=1`
+      );
+      const cfgItem = (cfgData?.value || [])[0];
+      if (cfgItem?.fields?.[COL.gremiumKommentar]) {
+        const spGen = JSON.parse(cfgItem.fields[COL.gremiumKommentar]);
+        if (Array.isArray(spGen) && spGen.length > 0) {
+          const local = loadSettings();
+          local.genehmiger = spGen;
+          saveSettingsData(local);
+          console.log('✓ Genehmiger-Config aus SP geladen:', spGen.map(g => g.email).join(', '));
+        }
+      }
+    } catch(eCfg) {
+      console.warn('SP-Config konnte nicht geladen werden (Fallback auf localStorage):', eCfg.message);
+    }
+
+    // ── isGremium bestimmen ──────────────────────────────────────────
+    // Primär: UPN in der konfigurierten Genehmiger-Liste ODER Admin
+    // Fallback: wenn noch keine Liste konfiguriert → SP-Lizenzen-Zugriff (Bootstrapping)
+    isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
+    const _myUpn  = (account?.username || '').toLowerCase();
+    const _genCfg = loadSettings().genehmiger || [];
+    if (_genCfg.length > 0) {
+      isGremium = isAdmin || _genCfg.some(g => (g.email || '').toLowerCase() === _myUpn);
+    } else {
+      // Noch keine Genehmiger konfiguriert → Fallback auf SP-Zugriff (für Ersteinrichtung)
+      isGremium = isAdmin || canReadLizenzen;
+    }
+    console.log(`ℹ isGremium=${isGremium} (upn=${_myUpn}, genCfg=${_genCfg.length})`);
+
     $id('boot').style.display = 'none';
     $id('app').style.display  = 'flex';
 
     const uName = account?.name || account?.username || '';
     $id('user-name').textContent = uName;
-
-    // Admin-Flag: nur administrator@dihag.com darf Einstellungen sehen
-    isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
 
     // Tab-Sichtbarkeit: Gremium sieht alles, normale User nur Antrag + eigene Anträge
     if (isGremium) {
@@ -936,6 +972,7 @@ function renderAntraege() {
 
   let items = allAntraege.filter(i => {
     const f = i.fields;
+    if (f?.Title === SP_CONFIG_TITLE) return false;  // Internen Config-Eintrag ausblenden
     if (statusF && f[COL.status] !== statusF) return false;
     if (riskF   && f[COL.risiko] !== riskF)  return false;
     if (!isGremium && myEmail && (f.Author0EMail || '').toLowerCase() !== myEmail) return false;
@@ -980,6 +1017,7 @@ function renderAntraege() {
 
 function updateOpenBadge() {
   const open = allAntraege.filter(i =>
+    i.fields?.Title !== SP_CONFIG_TITLE &&
     ['Eingereicht', 'In Prüfung', 'Rückfrage'].includes(i.fields?.[COL.status])
   ).length;
   const b = $id('badge-open');
@@ -993,6 +1031,7 @@ function updateOpenBadge() {
 function openAntragPanel(itemId) {
   const item = allAntraege.find(i => i.id == itemId);
   if (!item) return;
+  if (item.fields?.Title === SP_CONFIG_TITLE) return;  // Config-Item nicht öffnen
   const f = item.fields;
 
   $id('panel-title').innerHTML = `${statusBadge(f[COL.status])} <span style="margin-left:8px">${esc(f.Title || '–')}</span>`;
@@ -2504,6 +2543,41 @@ function loadSettings() {
 }
 function saveSettingsData(data) {
   localStorage.setItem('ki_settings', JSON.stringify(data));
+  // Bei Admin-Speicherung: Genehmiger-Liste auch in SP sichern (browserübergreifend)
+  if (isAdmin && data.genehmiger) {
+    saveSPConfig(data.genehmiger).catch(e =>
+      console.warn('SP-Config-Speicherung fehlgeschlagen:', e.message)
+    );
+  }
+}
+
+// ── SP-Konfiguration speichern ───────────────────────────────────────
+async function saveSPConfig(genehmigerList) {
+  if (!siteId || !listAntragId) return;
+  const json = JSON.stringify(
+    (genehmigerList || []).map(g => ({ email: g.email, name: g.name || '', rolle: g.rolle || '' }))
+  );
+  try {
+    // Prüfen ob Config-Item bereits existiert
+    const existing = await gGet(
+      `/sites/${siteId}/lists/${listAntragId}/items` +
+      `?$expand=fields($select=Title)&$filter=fields/Title eq '${SP_CONFIG_TITLE}'&$top=1`
+    );
+    const existingItem = (existing?.value || [])[0];
+    if (existingItem) {
+      await gPatch(
+        `/sites/${siteId}/lists/${listAntragId}/items/${existingItem.id}/fields`,
+        { [COL.gremiumKommentar]: json }
+      );
+    } else {
+      await gPost(`/sites/${siteId}/lists/${listAntragId}/items`, {
+        fields: { Title: SP_CONFIG_TITLE, [COL.gremiumKommentar]: json }
+      });
+    }
+    console.log('✓ Genehmiger-Config in SP gespeichert.');
+  } catch(e) {
+    throw e;
+  }
 }
 
 function renderEinstellungen() {
