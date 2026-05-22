@@ -462,23 +462,37 @@ async function boot() {
     // Admin-Flag: nur administrator@dihag.com darf Einstellungen sehen
     isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
 
-    // Tabs: Lizenzen nur für Gremium; Einstellungen nur für Admin
+    // Tab-Sichtbarkeit: Gremium sieht alles, normale User nur Antrag + eigene Anträge
     if (isGremium) {
       $id('gremium-badge').classList.remove('hidden');
     } else {
+      // Nicht-Gremium: Lizenzen, Register und Einstellungen ausblenden
       document.querySelector('[data-view="lizenzen"]').style.display = 'none';
+      document.querySelector('[data-view="register"]').style.display = 'none';
+      // Filter-Toolbar auf Anträge-View ausblenden (sehen nur eigene → kein Filter nötig)
+      const toolbar = document.querySelector('#view-antraege .toolbar');
+      if (toolbar) toolbar.style.display = 'none';
     }
+    // Einstellungen nur für Admin
     if (isAdmin) {
       $id('tab-einstellungen').style.display = '';
     }
+    // Register-Tab auch für Gremium ausblenden wenn Liste nicht gefunden
     if (!listRegisterId) {
       document.querySelector('[data-view="register"]').style.display = 'none';
     }
 
     renderAntragForm();
 
-    // Standardansicht: Anträge; bei Deep-Link (?antrag=ID) direkt laden
-    await switchView('antraege');
+    // Standardansicht: Gremium → Anträge, normale User → Neuer Antrag
+    const deepId = new URLSearchParams(location.search).get('antrag');
+    if (deepId) {
+      await switchView('antraege');   // Deep-Link immer auf Anträge
+    } else if (isGremium) {
+      await switchView('antraege');
+    } else {
+      await switchView('antrag');
+    }
 
     // SP-User-Map: Stufe 2 – aus Author/Editor vorhandener Items befüllen
     // (funktioniert auch wenn UserInfo-Liste nicht erreichbar war)
@@ -508,6 +522,11 @@ async function boot() {
 // VIEW SWITCHING
 // ═══════════════════════════════════════════════════════════════════
 async function switchView(view) {
+  // Zugriffsschutz: Nicht-Gremium darf nur antrag + antraege
+  if (!isGremium && !['antrag', 'antraege'].includes(view)) return;
+  // Einstellungen nur für Admin
+  if (view === 'einstellungen' && !isAdmin) return;
+
   currentView = view;
   // hidden-Klasse entfernen/setzen — .hidden hat display:none !important
   // und würde .view.active überschreiben wenn nicht explizit entfernt
@@ -863,7 +882,22 @@ async function loadAntraege() {
   $id('antraege-list').innerHTML = '';
 
   try {
-    const data = await gGet(`/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`);
+    // Nicht-Gremium: nur eigene Items laden (server-seitig filtern → kein Fremddaten-Zugriff)
+    let apiUrl = `/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`;
+    if (!isGremium) {
+      const myEmailFilter = (account?.username || '').toLowerCase();
+      if (myEmailFilter) {
+        apiUrl += `&$filter=createdBy/user/email eq '${encodeURIComponent(myEmailFilter)}'`;
+      }
+    }
+    let data;
+    try {
+      data = await gGet(apiUrl);
+    } catch(filterErr) {
+      // Fallback: Graph-Filter nicht unterstützt → alles laden, client-seitig filtern
+      console.warn('Server-Filter nicht unterstützt, Fallback auf client-seitigen Filter:', filterErr.message);
+      data = await gGet(`/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`);
+    }
     // Client-seitig sortieren — vermeidet 400 bei nicht-indizierten Feldern
     allAntraege = (data.value || []).sort((a, b) => {
       const da = new Date(a.fields?.Created || a.createdDateTime || 0);
