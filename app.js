@@ -1021,7 +1021,7 @@ function renderAntraege() {
     if (f?.Title === SP_CONFIG_TITLE) return false;  // Internen Config-Eintrag ausblenden
     if (statusF && f[COL.status] !== statusF) return false;
     if (riskF   && f[COL.risiko] !== riskF)  return false;
-    const itemAuthor = (f.Author0EMail || i.createdBy?.user?.email || '').toLowerCase();
+    const itemAuthor = (i.createdBy?.user?.email || f.Author0EMail || '').toLowerCase();
     if (!isGremium && myEmail && itemAuthor !== myEmail) return false;
     if (searchQ) {
       const hay = [f.Title, f[COL.hersteller], f[COL.verantw], f[COL.komponenten]].filter(Boolean).join(' ').toLowerCase();
@@ -1147,7 +1147,7 @@ function openAntragPanel(itemId) {
   const myEmailPanel   = (account?.username || '').toLowerCase();
 
   // Self-Approval-Guard: Gremium-User ist zugleich der Antragsteller → keine Aktionsbuttons
-  const antragAuthorEmail  = (f.Author0EMail || '').toLowerCase();
+  const antragAuthorEmail  = (item.createdBy?.user?.email || f.Author0EMail || '').toLowerCase();
   const isOwnAntrag        = myEmailPanel && antragAuthorEmail && myEmailPanel === antragAuthorEmail;
 
   // Effektive Genehmiger = konfigurierte Liste ohne den Antragsteller (darf nicht selbst zustimmen)
@@ -1270,8 +1270,9 @@ async function saveGremiumDecision(itemId, forceStatus) {
 
     // ── B: Einmal .find() – überall wiederverwenden ───────────────
     const prevItem      = allAntraege.find(i => i.id == itemId);
-    const antragAuthorG = (prevItem?.fields?.Author0EMail || '').toLowerCase();
+    const antragAuthorG = (prevItem?.createdBy?.user?.email || prevItem?.fields?.Author0EMail || '').toLowerCase();
     const myEmail       = (account?.username || '').toLowerCase();
+    let finalApprovalsList = []; // wird im einstimmig-Block befüllt, für Mail genutzt
 
     // Self-Approval-Guard
     if (myEmail && antragAuthorG && myEmail === antragAuthorG &&
@@ -1378,6 +1379,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
             return;
           }
           // Alle zugestimmt → Token ist bereits aus newKommentar raus (cleanBase oben)
+          finalApprovalsList = approvals; // für Mail-Versand merken
         }
       }
     }
@@ -1403,11 +1405,10 @@ async function saveGremiumDecision(itemId, forceStatus) {
 
       if (st.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
         const statusEmoji = status === 'Genehmigt' ? '✅' : status === 'Abgelehnt' ? '❌' : '❓';
-        // Alle Genehmiger die zugestimmt haben (aus finalem Kommentar / aktuellem Approver)
+        // Alle Genehmiger die zugestimmt haben (aus finalApprovalsList – APPROVALS-Token ist im finalen Kommentar nicht mehr vorhanden)
         const allGenehmigerCfg = st.genehmiger || [];
-        const finalApprovals   = parseApprovals(antragAfter.fields?.[COL.gremiumKommentar] || '');
-        const allApprovedNames = status === 'Genehmigt' && finalApprovals.length
-          ? finalApprovals.map(e => {
+        const allApprovedNames = status === 'Genehmigt' && finalApprovalsList.length
+          ? finalApprovalsList.map(e => {
               const g = allGenehmigerCfg.find(x => x.email.toLowerCase() === e.toLowerCase());
               return g?.name || e;
             })
@@ -1443,9 +1444,8 @@ async function saveGremiumDecision(itemId, forceStatus) {
       // ── Abschluss-Mail an alle Genehmiger bei finaler Genehmigung ──
       if (status === 'Genehmigt' && st.benachrichtigung?.beiEntscheidung !== false) {
         const allGenehmigerCfg = st.genehmiger || [];
-        const finalApprovals   = parseApprovals(antragAfter.fields?.[COL.gremiumKommentar] || '');
-        const allApprovedNames = finalApprovals.length
-          ? finalApprovals.map(e => {
+        const allApprovedNames = finalApprovalsList.length
+          ? finalApprovalsList.map(e => {
               const g = allGenehmigerCfg.find(x => x.email.toLowerCase() === e.toLowerCase());
               return g?.name || e;
             })
