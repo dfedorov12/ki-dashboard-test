@@ -522,3 +522,17 @@ tbody td { padding: 10px 14px; color: #1e2939; vertical-align: middle; }
 .upn-chip-more {
   background: #f3f4f6; color: #6b7280; border-color: #e5e7eb;
 }
+
+/* ─── REFRESH BUTTON ────────────────────────────────────────────── */
+.refresh-btn {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 4px 8px;
+  transition: transform .2s;
+}
+.refresh-btn:hover:not(:disabled) { transform: rotate(30deg); }
+.refresh-btn.refreshing {
+  animation: spin .7s linear infinite;
+  pointer-events: none;
+  opacity: .6;
+}

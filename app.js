@@ -610,6 +610,22 @@ async function switchView(view) {
   if (view === 'einstellungen') renderEinstellungen();
 }
 
+async function refreshCurrentView() {
+  const btn = $id('btn-refresh');
+  if (btn) { btn.disabled = true; btn.classList.add('refreshing'); }
+  _cacheTs[currentView] = 0;
+  try {
+    if      (currentView === 'antraege') await loadAntraege();
+    else if (currentView === 'lizenzen') await loadLizenzen();
+    else if (currentView === 'register') await loadRegister();
+    showToast('Daten aktualisiert');
+  } catch(e) {
+    showToast('Fehler beim Aktualisieren: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('refreshing'); }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // ANTRAG FORM
 // ═══════════════════════════════════════════════════════════════════
