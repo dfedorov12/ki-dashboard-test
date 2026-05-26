@@ -1474,28 +1474,58 @@ async function loadLizenzen() {
   $id('lizenzen-wrap').innerHTML = '';
 
   try {
-    const data = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=*)&$top=999`);
-    allLizenzen = data.value || [];
-    _cacheTs.lizenzen = Date.now();
-
-    // spUserMap aus vorhandenen Lizenz-Einträgen befüllen (KI-User-Feld enthält LookupIds)
-    for (const item of allLizenzen) {
-      const f = item.fields || {};
-      const names = Array.isArray(f[COL.nutzer]) ? f[COL.nutzer] : (f[COL.nutzer] ? [f[COL.nutzer]] : []);
-      const ids   = Array.isArray(f[COL.nutzer+'LookupId']) ? f[COL.nutzer+'LookupId'] : (f[COL.nutzer+'LookupId'] ? [f[COL.nutzer+'LookupId']] : []);
-      names.forEach((n, i) => {
-        const name  = typeof n === 'string' ? n : (n?.LookupValue || '');
-        const spId  = ids[i];
-        if (name && spId) seedSpUser(spId, '', '', name);
+    // SP REST mit Person-Feld-Expansion liefert EMail direkt aus der Liste —
+    // kein separater Lookup nötig. Fallback auf Graph wenn kein SP-Token verfügbar.
+    const spToken = await tryGetSpToken();
+    if (spToken && COL.nutzer) {
+      // SP REST: $expand=KIUser gibt {ID, Title, EMail} pro User zurück
+      const nutzerField = COL.nutzer;
+      const restUrl = `https://${SP_HOST}${SP_SITE_PATH}/_api/web/lists/getbytitle('${LIST_LIZENZEN}')/items` +
+        `?$select=*,${nutzerField}/ID,${nutzerField}/Title,${nutzerField}/EMail` +
+        `&$expand=${nutzerField}&$top=999`;
+      const res = await fetch(restUrl, {
+        headers: { 'Authorization': `Bearer ${spToken}`, 'Accept': 'application/json;odata=verbose' }
       });
+      if (!res.ok) throw new Error(`SP REST ${res.status}`);
+      const restData = await res.json();
+      // SP REST liefert Felder flach (nicht in fields{}); für Kompatibilität in fields{} einpacken
+      allLizenzen = (restData?.d?.results || []).map(item => {
+        // Personenfeld normalisieren: SP REST gibt Array oder einzelnes Objekt zurück
+        const rawUsers = item[nutzerField]?.results || (item[nutzerField] ? [item[nutzerField]] : []);
+        // Emails in spIdToEmail eintragen
+        rawUsers.forEach(u => {
+          if (u.ID && u.EMail) seedSpUser(u.ID, u.EMail, '', u.Title || '');
+        });
+        // Für parseLizenzUsersWithIds: KIUser als Array von {LookupId, LookupValue} + KIUserLookupId
+        const lookupArr = rawUsers.map(u => ({ LookupId: u.ID, LookupValue: u.Title || '' }));
+        const idArr     = rawUsers.map(u => u.ID);
+        return {
+          id:     item.ID,
+          fields: { ...item, [nutzerField]: lookupArr, [nutzerField + 'LookupId']: idArr }
+        };
+      });
+      console.log('✓ Lizenzen via SP REST geladen (mit UPNs):', allLizenzen.length);
+    } else {
+      // Fallback: Graph API (keine direkten EMail-Daten in Personenfeldern)
+      const data = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=*)&$top=999`);
+      allLizenzen = data.value || [];
+      // spUserMap aus vorhandenen Namen befüllen (ohne E-Mail)
+      for (const item of allLizenzen) {
+        const f    = item.fields || {};
+        const names = Array.isArray(f[COL.nutzer]) ? f[COL.nutzer] : (f[COL.nutzer] ? [f[COL.nutzer]] : []);
+        const ids   = Array.isArray(f[COL.nutzer+'LookupId']) ? f[COL.nutzer+'LookupId'] : (f[COL.nutzer+'LookupId'] ? [f[COL.nutzer+'LookupId']] : []);
+        names.forEach((n, idx) => {
+          const name = typeof n === 'string' ? n : (n?.LookupValue || '');
+          if (name && ids[idx]) seedSpUser(ids[idx], '', '', name);
+        });
+      }
+      console.log('✓ Lizenzen via Graph geladen (UPNs ggf. nicht verfügbar):', allLizenzen.length);
     }
-    console.log('✓ SP-User-Map nach Lizenzen-Seeding:', Object.keys(spUserMap).length, 'Einträge');
-
-    // UPN-Reverse-Map aufbauen (einmalig) → für UPN-Anzeige in der Listenansicht
-    buildSpIdEmailMap().then(() => renderLizenzen()).catch(() => {});
+    _cacheTs.lizenzen = Date.now();
     renderLizenzen();
   } catch(e) {
     $id('lizenzen-loading').textContent = 'Fehler: ' + e.message;
+    console.error('loadLizenzen:', e);
   }
 }
 
