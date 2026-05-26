@@ -1179,29 +1179,7 @@ function openAntragPanel(itemId) {
   // APPROVALS-Token aus Kommentar für die Anzeige entfernen
   const kommentarClean = (f[COL.gremiumKommentar] || '').replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
 
-  // Für alle User: Status-Bereich (read-only für normale User)
-  const statusSection = !isGremium ? `
-    <div class="panel-section">
-      <div class="panel-section-title">Status</div>
-      ${row('Aktueller Status', statusBadge(f[COL.status]))}
-      ${kommentarClean ? `<tr><td class="panel-field-label" style="vertical-align:top;padding-top:6px">Gremium-Kommentar</td><td>${renderKommentarLog(kommentarClean)}</td></tr>` : ''}
-      ${f[COL.auflagen]         ? row('Auflagen',           esc(f[COL.auflagen]), true) : ''}
-      ${f[COL.freigabeDatum]    ? row('Freigabedatum',      fmtDate(f[COL.freigabeDatum])) : ''}
-    </div>` : '';
-
-  // Rückfrage-Antwort-Sektion für nicht-Gremium-User
-  const rueckfrageSection = (!isGremium && f[COL.status] === 'Rückfrage') ? `
-    <div style="background:#faf5ff;border:1.5px solid #d8b4fe;border-radius:10px;padding:16px;margin-top:12px">
-      <div style="font-size:.8rem;font-weight:700;color:#7e22ce;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">💬 Rückfrage des Gremiums</div>
-      ${kommentarClean ? `<div style="background:#fff;border:1px solid #e9d5ff;border-radius:7px;padding:0 12px;margin-bottom:14px">${renderKommentarLog(kommentarClean)}</div>` : ''}
-      <div class="form-group" style="margin-bottom:10px">
-        <label class="form-label">Ihre Antwort</label>
-        <textarea id="rueck-antwort" class="form-control" rows="3" placeholder="Bitte beantworten Sie die Rückfrage hier…"></textarea>
-      </div>
-      <button class="btn btn-primary btn-sm" onclick="submitRueckfrageAntwort(${item.id})">Antwort senden</button>
-    </div>` : '';
-
-  const isDecided    = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
+  const isDecided      = ['Genehmigt', 'Abgelehnt'].includes(f[COL.status]);
 
   // Einstimmig-Modus: Abstimmungsstand aus GremiumKommentar lesen
   const _stPanel       = loadSettings();
@@ -1210,94 +1188,118 @@ function openAntragPanel(itemId) {
   const panelApprovals = parseApprovals(f[COL.gremiumKommentar]);
   const myEmailPanel   = (account?.username || '').toLowerCase();
 
-  // Self-Approval-Guard: Gremium-User ist zugleich der Antragsteller → keine Aktionsbuttons
+  // Self-Approval-Guard
   const antragAuthorEmail  = (item.createdBy?.user?.email || f.Author0EMail || '').toLowerCase();
   const isOwnAntrag        = myEmailPanel && antragAuthorEmail && myEmailPanel === antragAuthorEmail;
-
-  // Effektive Genehmiger = konfigurierte Liste ohne den Antragsteller (darf nicht selbst zustimmen)
   const effectiveGenehmiger  = _genPanel.filter(g => g.email.toLowerCase() !== antragAuthorEmail);
   const myApprovedAlready    = panelApprovals.includes(myEmailPanel);
-  const showApprovalTracker  = !isDecided && !isOwnAntrag && einstimmig && effectiveGenehmiger.length >= 1;
+  const showApprovalTracker  = einstimmig && effectiveGenehmiger.length >= 1;
 
-  // Wiederverwendbarer Read-Only-Block (entschieden oder eigener Antrag)
-  const decidedBlock = `
+  // ── Gemeinsamer Zustimmungsstand-Block (alle User sehen ihn) ──────
+  const approvalTrackerHTML = (showApprovalTracker && !isDecided) ? `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.82rem">
+      <div style="font-weight:600;color:#15803d;margin-bottom:8px">⚖️ Einstimmig – Zustimmungsstand</div>
+      ${effectiveGenehmiger.map(g => {
+        const approved = panelApprovals.includes(g.email.toLowerCase());
+        const rc2 = ROLLE_COLORS[g.rolle] || null;
+        const rolleBadge2 = g.rolle && rc2
+          ? `<span style="font-size:.65rem;font-weight:600;padding:1px 7px;border-radius:20px;background:${rc2.bg};color:${rc2.color};border:1px solid ${rc2.border}">${esc(g.rolle)}</span>`
+          : '';
+        return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
+          <span style="color:${approved ? '#15803d' : '#9ca3af'};font-size:1rem">${approved ? '✓' : '○'}</span>
+          <span style="${approved ? 'color:#15803d;font-weight:500' : 'color:#6b7280'}">${esc(g.name || g.email)}</span>
+          ${rolleBadge2}
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  // ── Gemeinsamer Kommentar-Verlauf (alle User) ─────────────────────
+  const verlaufHTML = kommentarClean ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💬 Kommentar-Verlauf</div>
+      <div style="max-height:220px;overflow-y:auto;border:1px solid #e5e9ef;border-radius:8px;padding:0 12px;background:#fafafa">
+        ${renderKommentarLog(kommentarClean)}
+      </div>
+    </div>` : '';
+
+  // ── Auflagen (alle User, nur wenn vorhanden) ──────────────────────
+  const auflagenHTML = f[COL.auflagen] ? `
+    <div style="margin-bottom:14px">
+      <div class="panel-field-label">Auflagen / Bedingungen</div>
+      <div class="panel-field-value pre" style="background:#fffbeb;padding:8px 10px;border-radius:7px;border:1px solid #fde68a">${esc(f[COL.auflagen])}</div>
+    </div>` : '';
+
+  // ── Status-Info (Freigabedatum) ───────────────────────────────────
+  const statusInfoHTML = isDecided ? `
     <div style="margin-bottom:12px">
       ${statusBadge(f[COL.status])}
       ${f[COL.freigabeDatum] ? `<span style="font-size:.8rem;color:#6b7280;margin-left:8px">📅 ${fmtDate(f[COL.freigabeDatum])}</span>` : ''}
-    </div>
-    ${kommentarClean ? `
-      <div style="margin-bottom:10px">
-        <div class="panel-field-label" style="margin-bottom:6px">Verlauf</div>
-        <div style="border:1px solid #e5e9ef;border-radius:8px;padding:0 12px;background:#fafafa">
-          ${renderKommentarLog(kommentarClean)}
-        </div>
-      </div>` : ''}
-    ${f[COL.auflagen] ? `
-      <div>
-        <div class="panel-field-label">Auflagen / Bedingungen</div>
-        <div class="panel-field-value pre" style="background:#fffbeb;padding:8px 10px;border-radius:7px;border:1px solid #fde68a">${esc(f[COL.auflagen])}</div>
-      </div>` : ''}`;
+    </div>` : '';
 
-  const gremiumSection = isGremium ? `
+  // ── Kommentarfeld für ALLE User (Rückfrage-Antwort oder normaler Kommentar) ──
+  const isRueckfrage = f[COL.status] === 'Rückfrage';
+  const userKommentarSection = !isDecided ? `
+    <div style="margin-top:4px">
+      <div class="form-group">
+        <label class="form-label">${isRueckfrage ? '💬 Antwort auf Rückfrage' : 'Kommentar'} <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
+        <textarea id="pg-kommentar" class="form-control" rows="2" maxlength="1000"
+          style="resize:none;overflow:hidden;min-height:60px"
+          oninput="this.style.height='auto';this.style.height=Math.max(60,this.scrollHeight)+'px';$id('pg-kom-count').textContent=this.value.length+'/1000';const _rb=$id('btn-rueckfrage');if(_rb)_rb.disabled=!this.value.trim();"
+          placeholder="${isRueckfrage ? 'Bitte beantworten Sie die Rückfrage hier…' : 'Neuen Kommentar eingeben…'}"></textarea>
+        <div style="text-align:right;font-size:.71rem;color:#9ca3af;margin-top:3px"><span id="pg-kom-count">0/1000</span></div>
+      </div>
+      ${!isGremium ? `<button class="btn btn-primary btn-sm" onclick="saveUserKommentar(${item.id})">💬 Kommentar senden</button>` : ''}
+    </div>` : '';
+
+  // ── Für alle User: Status-Sektion (read-only Felder) ─────────────
+  const statusSection = !isGremium ? `
+    <div class="panel-section">
+      <div class="panel-section-title">Status</div>
+      ${row('Aktueller Status', statusBadge(f[COL.status]))}
+      ${f[COL.freigabeDatum] ? row('Freigabedatum', fmtDate(f[COL.freigabeDatum])) : ''}
+    </div>` : '';
+
+  // ── Für alle User: Verlauf + Zustimmungsstand + Kommentarfeld ─────
+  const verlaufSection = `
     <div class="panel-gremium">
       <div class="panel-gremium-title">⚖️ Gremium-Entscheidung</div>
+      ${statusInfoHTML}
+      ${approvalTrackerHTML}
+      ${verlaufHTML}
+      ${auflagenHTML}
+      ${userKommentarSection}
+    </div>`;
+
+  // ── Nur Gremium: Aktionsbuttons ───────────────────────────────────
+  const gremiumSection = isGremium ? `
+    <div style="margin-top:4px">
       ${isOwnAntrag ? `
         <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:.82rem;color:#92400e">
           ℹ️ <strong>Eigener Antrag</strong> – du bist der Antragsteller und kannst diesen Antrag nicht selbst genehmigen.
         </div>
-        ${decidedBlock}
       ` : isDecided ? `
-        ${decidedBlock}
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e5e9ef">
+        <div style="margin-top:4px;padding-top:12px;border-top:1px solid #e5e9ef">
           <button class="btn btn-neutral btn-sm" style="font-size:.75rem;opacity:.7"
             onclick="if(confirm('Entscheidung wirklich zurücksetzen und Antrag auf „Eingereicht" setzen?')) saveGremiumDecision(${item.id},'Eingereicht')"
-            title="Entscheidung zurücksetzen – öffnet Bestätigungsdialog">↩ Zurücksetzen</button>
+            title="Entscheidung zurücksetzen">↩ Zurücksetzen</button>
         </div>
       ` : `
-        ${showApprovalTracker ? `
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.82rem">
-          <div style="font-weight:600;color:#15803d;margin-bottom:8px">⚖️ Einstimmig – Zustimmungsstand</div>
-          ${effectiveGenehmiger.map(g => {
-            const approved = panelApprovals.includes(g.email.toLowerCase());
-            const rc2 = ROLLE_COLORS[g.rolle] || null;
-            const rolleBadge2 = g.rolle && rc2
-              ? `<span style="font-size:.65rem;font-weight:600;padding:1px 7px;border-radius:20px;background:${rc2.bg};color:${rc2.color};border:1px solid ${rc2.border}">${esc(g.rolle)}</span>`
-              : '';
-            return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
-              <span style="color:${approved ? '#15803d' : '#9ca3af'};font-size:1rem">${approved ? '✓' : '○'}</span>
-              <span style="${approved ? 'color:#15803d;font-weight:500' : 'color:#6b7280'}">${esc(g.name || g.email)}</span>
-              ${rolleBadge2}
-            </div>`;
-          }).join('')}
-        </div>` : ''}
-        ${kommentarClean ? `
-        <div class="form-group" style="margin-bottom:14px">
-          <div style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💬 Kommentar-Verlauf</div>
-          <div style="max-height:220px;overflow-y:auto;border:1px solid #e5e9ef;border-radius:8px;padding:0 12px;background:#fafafa">
-            ${renderKommentarLog(kommentarClean)}
-          </div>
-        </div>` : ''}
-        <div class="form-group">
-          <label class="form-label">Neuer Kommentar <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
-          <textarea id="pg-kommentar" class="form-control" rows="2" maxlength="1000"
-            style="resize:none;overflow:hidden;min-height:60px"
-            oninput="this.style.height='auto';this.style.height=Math.max(60,this.scrollHeight)+'px';$id('pg-kom-count').textContent=this.value.length+'/1000';const _rb=$id('btn-rueckfrage');if(_rb)_rb.disabled=!this.value.trim();"
-            placeholder="Neuen Kommentar eingeben…"></textarea>
-          <div style="text-align:right;font-size:.71rem;color:#9ca3af;margin-top:3px"><span id="pg-kom-count">0/1000</span></div>
-        </div>
         <div class="form-group">
           <label class="form-label">Auflagen / Bedingungen <span style="color:#9ca3af;font-weight:400;font-size:.75rem">(bei Genehmigung)</span></label>
           <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
         </div>
         <div class="panel-actions">
           <button class="btn btn-success btn-sm" ${myApprovedAlready ? 'disabled' : ''} onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
-          <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
+          <button class="btn btn-danger btn-sm" onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
           <button id="btn-rueckfrage" class="btn btn-neutral btn-sm" disabled title="Bitte zuerst einen Kommentar eingeben" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
         </div>
         ${einstimmig ? '<div style="font-size:.75rem;color:#6b7280;margin-top:6px">ℹ️ Eine Ablehnung ist sofort final – unabhängig vom Einstimmig-Modus.</div>' : ''}
       `}
     </div>` : '';
+
+  // Rückfrage-Section nicht mehr separat nötig (in verlaufSection enthalten)
+  const rueckfrageSection = '';
 
   // Anhänge-Platzhalter (wird async befüllt)
   const attachSection = `
@@ -1316,7 +1318,7 @@ function openAntragPanel(itemId) {
       ` : ''}
     </div>`;
 
-  $id('panel-body').innerHTML = rows1 + statusSection + rueckfrageSection + gremiumSection + attachSection;
+  $id('panel-body').innerHTML = rows1 + statusSection + verlaufSection + gremiumSection + attachSection;
   openPanel();
 
   // Anhänge asynchron nachladen (ohne await – kein Blockieren)
@@ -1632,6 +1634,47 @@ async function submitRueckfrageAntwort(itemId) {
     showToast('Antwort eingereicht.');
   } catch(e) {
     showToast('Fehler beim Senden: ' + e.message, 'error');
+  }
+}
+
+// Kommentar von einem normalen User speichern (kein Statuswechsel)
+async function saveUserKommentar(itemId) {
+  const btn = document.querySelector(`[onclick="saveUserKommentar(${itemId})"]`);
+  const text = $id('pg-kommentar')?.value?.trim() || '';
+  if (!text) {
+    showToast('Bitte einen Kommentar eingeben.', 'error');
+    $id('pg-kommentar')?.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Senden…'; }
+
+  try {
+    const item       = allAntraege.find(i => i.id == itemId);
+    const prevKomRaw = item?.fields?.[COL.gremiumKommentar] || '';
+    const now        = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'})
+                     + ' ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    const displayName = (account?.name || account?.username || '').trim();
+    const nowAuthor   = displayName ? `${now} | ${displayName}` : now;
+
+    // APPROVALS-Token erhalten; neuen Eintrag oben anhängen
+    const appTokenMatch = prevKomRaw.match(/(\[APPROVALS:[^\]]*\])\n?/);
+    const appToken      = appTokenMatch ? appTokenMatch[1] : '';
+    const cleanBase     = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+    const newEntry      = `[${nowAuthor}] 💬 ${text}`;
+    const newBody       = cleanBase ? `${newEntry}\n──\n${cleanBase}` : newEntry;
+    const newKommentar  = appToken ? `${appToken}\n${newBody}` : newBody;
+
+    const fields = { [COL.gremiumKommentar]: newKommentar };
+    await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
+
+    const idx = allAntraege.findIndex(i => i.id == itemId);
+    if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
+
+    showToast('💬 Kommentar gespeichert.');
+    openAntragPanel(itemId);  // Panel neu rendern (frische Daten aus allAntraege)
+  } catch(e) {
+    showToast('Fehler beim Speichern: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '💬 Kommentar senden'; }
   }
 }
 
