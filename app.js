@@ -986,7 +986,7 @@ async function submitAntrag(e) {
       const deepUrl = `${location.origin}${location.pathname}?antrag=${newItem.id}`;
       sendMail(
         _genToNotify.map(g => ({ address: g.email, name: g.name })),
-        `[KI-Antrag] ${titleVal} – Prüfung erforderlich`,
+        `[KI-Antrag] #${newItem.id} ${titleVal} – Prüfung erforderlich`,
         mailTemplate(
           'Neuer KI-Antrag zur Prüfung eingegangen',
           [
@@ -1115,7 +1115,7 @@ function renderAntraege() {
     const by = f.Author0LookupValue || f['Author/Title'] || '';
     return `<div class="item-card" onclick="openAntragPanel(${i.id})">
       <div class="card-top">
-        <div class="card-title">${esc(f.Title || '–')}</div>
+        <div class="card-title">${esc(f.Title || '–')} <span style="font-size:.72rem;font-weight:500;color:#9ca3af;margin-left:4px">#${i.id}</span></div>
         ${statusBadge(f[COL.status])}
       </div>
       <div class="card-tags">
@@ -1145,7 +1145,7 @@ function openAntragPanel(itemId) {
   if (item.fields?.Title === SP_CONFIG_TITLE) return;  // Config-Item nicht öffnen
   const f = item.fields;
 
-  $id('panel-title').innerHTML = `${statusBadge(f[COL.status])} <span style="margin-left:8px">${esc(f.Title || '–')}</span>`;
+  $id('panel-title').innerHTML = `${statusBadge(f[COL.status])} <span style="margin-left:8px">${esc(f.Title || '–')}</span> <span style="font-size:.72rem;font-weight:500;color:#9ca3af;margin-left:6px">#${item.id}</span>`;
 
   const row = (label, value, pre = false) =>
     `<div class="panel-field">
@@ -1429,7 +1429,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
               });
               sendMail(
                 remaining.map(g => ({ address: g.email, name: g.name })),
-                `[KI-Antrag] ${prevItem?.fields?.Title || ''} – Zustimmung ausstehend`,
+                `[KI-Antrag] #${itemId} ${prevItem?.fields?.Title || ''} – Zustimmung ausstehend`,
                 mailTemplate(
                   'Zustimmung zu einem KI-Antrag ausstehend',
                   [
@@ -1506,7 +1506,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
 
         sendMail(
           [{ address: authorEmail, name: authorName }],
-          `[KI-Antrag] ${savedName} – ${status}`,
+          `[KI-Antrag] #${itemId} ${savedName} – ${status}`,
           mailTemplate(
             `Ihr KI-Antrag wurde ${status === 'Genehmigt' ? 'genehmigt' : status === 'Abgelehnt' ? 'abgelehnt' : 'mit einer Rückfrage versehen'}`,
             infoRows,
@@ -1533,7 +1533,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
         if (genehmigerRecipients.length) {
           sendMail(
             genehmigerRecipients.map(g => ({ address: g.email, name: g.name })),
-            `[KI-Antrag] ${savedName} – ✅ Einstimmig genehmigt`,
+            `[KI-Antrag] #${itemId} ${savedName} – ✅ Einstimmig genehmigt`,
             mailTemplate(
               'KI-Antrag wurde einstimmig genehmigt',
               [
