@@ -1189,12 +1189,23 @@ function openAntragPanel(itemId) {
             </div>`;
           }).join('')}
         </div>` : ''}
+        ${kommentarClean ? `
+        <div class="form-group" style="margin-bottom:14px">
+          <div style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💬 Kommentar-Verlauf</div>
+          <div style="max-height:220px;overflow-y:auto;border:1px solid #e5e9ef;border-radius:8px;padding:0 12px;background:#fafafa">
+            ${renderKommentarLog(kommentarClean)}
+          </div>
+        </div>` : ''}
         <div class="form-group">
-          <label class="form-label">Kommentar / Begründung <span style="color:#6b7280;font-weight:400">(optional)</span></label>
-          <textarea id="pg-kommentar" class="form-control" rows="3" placeholder="Begründung der Entscheidung…">${esc(kommentarClean)}</textarea>
+          <label class="form-label">Neuer Kommentar <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
+          <textarea id="pg-kommentar" class="form-control" rows="2" maxlength="1000"
+            style="resize:none;overflow:hidden;min-height:60px"
+            oninput="this.style.height='auto';this.style.height=Math.max(60,this.scrollHeight)+'px';$id('pg-kom-count').textContent=this.value.length+'/1000'"
+            placeholder="Neuen Kommentar eingeben…"></textarea>
+          <div style="text-align:right;font-size:.71rem;color:#9ca3af;margin-top:3px"><span id="pg-kom-count">0/1000</span></div>
         </div>
         <div class="form-group">
-          <label class="form-label">Auflagen / Bedingungen</label>
+          <label class="form-label">Auflagen / Bedingungen <span style="color:#9ca3af;font-weight:400;font-size:.75rem">(bei Genehmigung)</span></label>
           <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
         </div>
         <div class="panel-actions">
@@ -1254,17 +1265,19 @@ async function saveGremiumDecision(itemId, forceStatus) {
       return;
     }
 
-    const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
-    const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'})
-              + ' ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    const prevKomRaw    = prevItem?.fields?.[COL.gremiumKommentar] || '';
+    const now           = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'})
+                        + ' ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    const displayName   = (account?.name || account?.username || '').trim();
+    const nowAuthor     = displayName ? `${now} | ${displayName}` : now;
 
-    // Kommentar mit Zeitstempel voranstellen (APPROVALS-Token vorher entfernen)
+    // Kommentar mit Zeitstempel + Autor voranstellen (APPROVALS-Token vorher entfernen)
     const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
     let newKommentar = cleanBase;
     if (kommentar) {
       newKommentar = cleanBase
-        ? `[${now}] ${kommentar}\n──\n${cleanBase}`
-        : `[${now}] ${kommentar}`;
+        ? `[${nowAuthor}] ${kommentar}\n──\n${cleanBase}`
+        : `[${nowAuthor}] ${kommentar}`;
     }
 
     // ── Einstimmig-Modus: Teilzustimmung verfolgen ───────────────
@@ -1431,11 +1444,13 @@ async function submitRueckfrageAntwort(itemId) {
 
   const item = allAntraege.find(i => i.id == itemId);
   const prevKommentar = item?.fields?.[COL.gremiumKommentar] || '';
-  const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
-              new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+  const now         = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
+                      new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+  const authorName  = (account?.name || account?.username || '').trim();
+  const nowAuthor   = authorName ? `${now} | ${authorName}` : now;
   const newKommentar = prevKommentar
-    ? `[${now}] Antwort: ${text}\n──\n${prevKommentar}`
-    : `[${now}] Antwort: ${text}`;
+    ? `[${nowAuthor}] Antwort: ${text}\n──\n${prevKommentar}`
+    : `[${nowAuthor}] Antwort: ${text}`;
 
   const fields = {
     [COL.status]: 'Eingereicht',
@@ -2615,6 +2630,45 @@ function riskBadge(r) {
 function parseApprovals(kommentar) {
   const m = (kommentar || '').match(/\[APPROVALS:(.*?)\]/);
   return m ? m[1].split('|').filter(Boolean) : [];
+}
+
+// Rendert den Kommentar-Verlauf als formatiertes Log (read-only)
+// Format je Eintrag: "[DD.MM.YYYY HH:MM | Autorenname] Text" oder legacy "[DD.MM.YYYY HH:MM] Text"
+function renderKommentarLog(text) {
+  if (!text) return '';
+  const entries = text.split(/\n──\n/).map(e => e.trim()).filter(Boolean);
+  if (!entries.length) return '';
+  return entries.map(entry => {
+    const m = entry.match(/^\[([^\]]+)\]\s*([\s\S]*)$/);
+    let date = '', author = '', body = entry;
+    if (m) {
+      const parts = m[1].split('|').map(s => s.trim());
+      date   = parts[0] || '';
+      author = parts[1] || '';
+      body   = m[2].trim();
+    }
+    const words    = (author || '?').split(' ').filter(Boolean);
+    const initials = words.length >= 2
+      ? (words[0][0] + words[words.length - 1][0]).toUpperCase()
+      : (author || '?').slice(0, 2).toUpperCase();
+    const isAntwort = body.startsWith('Antwort:');
+    const avatarBg  = isAntwort ? '#fef3c7' : '#e0e7ff';
+    const avatarCol = isAntwort ? '#92400e' : '#4338ca';
+    return `
+      <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9;last-child:border-bottom:none">
+        <div style="flex-shrink:0;width:28px;height:28px;border-radius:50%;background:${avatarBg};color:${avatarCol};
+                    font-size:.63rem;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:2px">
+          ${esc(initials)}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px;flex-wrap:wrap">
+            ${author ? `<span style="font-size:.8rem;font-weight:600;color:#1e2939">${esc(author)}</span>` : '<span style="font-size:.8rem;font-weight:600;color:#6b7280">Gremium</span>'}
+            ${date   ? `<span style="font-size:.71rem;color:#9ca3af">${esc(date)}</span>` : ''}
+          </div>
+          <div style="font-size:.82rem;color:#374151;white-space:pre-wrap;line-height:1.45;word-break:break-word">${esc(body)}</div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 function loadSettings() {
