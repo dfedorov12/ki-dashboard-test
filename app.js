@@ -1198,11 +1198,12 @@ function openAntragPanel(itemId) {
           <textarea id="pg-auflagen" class="form-control" rows="2" placeholder="Ggf. Auflagen oder Bedingungen…">${esc(f[COL.auflagen] || '')}</textarea>
         </div>
         <div class="panel-actions">
-          <button class="btn btn-success btn-sm" onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
+          <button class="btn btn-success btn-sm" ${myApprovedAlready ? 'disabled' : ''} onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
           <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
         </div>
+        ${einstimmig ? '<div style="font-size:.75rem;color:#6b7280;margin-top:6px">ℹ️ Eine Ablehnung ist sofort final – unabhängig vom Einstimmig-Modus.</div>' : ''}
       `}
     </div>` : '';
 
@@ -1231,131 +1232,127 @@ function openAntragPanel(itemId) {
 }
 
 async function saveGremiumDecision(itemId, forceStatus) {
-  const status    = forceStatus || allAntraege.find(i => i.id == itemId)?.fields?.[COL.status] || 'In Prüfung';
-  const kommentar = $id('pg-kommentar')?.value?.trim() || '';
-  const auflagen  = $id('pg-auflagen')?.value?.trim()  || '';
-
-  // Self-Approval-Guard: eigene Anträge können nicht selbst genehmigt/abgelehnt werden
-  const prevItemCheck = allAntraege.find(i => i.id == itemId);
-  const antragAuthorG = (prevItemCheck?.fields?.Author0EMail || '').toLowerCase();
-  const myEmailG      = (account?.username || '').toLowerCase();
-  if (myEmailG && antragAuthorG && myEmailG === antragAuthorG &&
-      (status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage')) {
-    showToast('Eigene Anträge können nicht selbst genehmigt werden.', 'error');
-    return;
-  }
-
-
-
-  const prevItem = allAntraege.find(i => i.id == itemId);
-  const prevKommentar = prevItem?.fields?.[COL.gremiumKommentar] || '';
-  const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
-              new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
-  let newKommentar = prevKommentar;
-  if (kommentar) {
-    newKommentar = prevKommentar
-      ? `[${now}] ${kommentar}\n──\n${prevKommentar}`
-      : `[${now}] ${kommentar}`;
-  }
-
-  // ── Einstimmig-Modus: Teilzustimmung verfolgen ───────────────────
-  if (status === 'Genehmigt') {
-    const _stD = loadSettings();
-    const modus = _stD.benachrichtigung?.genehmigungsmodus || 'einstimmig';
-    if (modus === 'einstimmig') {
-      // Effektive Genehmiger: Antragsteller aus der Pflicht-Zustimmungsliste ausschließen
-      const _genDAll  = _stD.genehmiger || [];
-      const _genD     = _genDAll.filter(g => g.email.toLowerCase() !== antragAuthorG);
-      if (_genD.length >= 1) {
-        const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
-        const approvals  = parseApprovals(prevKomRaw);
-        const myEmailD   = (account?.username || '').toLowerCase();
-        if (!approvals.includes(myEmailD)) approvals.push(myEmailD);
-        const allApproved = _genD.every(g => approvals.includes(g.email.toLowerCase()));
-        if (!allApproved) {
-          // Noch nicht alle zugestimmt → Zwischenspeichern, Status auf 'In Prüfung' halten
-          const appToken  = `[APPROVALS:${approvals.join('|')}]`;
-          const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-          let partialKom = cleanBase;
-          if (kommentar) {
-            partialKom = cleanBase
-              ? `[${now}] ${kommentar}\n──\n${cleanBase}`
-              : `[${now}] ${kommentar}`;
-          }
-          partialKom = partialKom ? `${appToken}\n${partialKom}` : appToken;
-          try {
-            await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`,
-              { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
-            const idx2 = allAntraege.findIndex(i => i.id == itemId);
-            if (idx2 >= 0) Object.assign(allAntraege[idx2].fields, { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
-          } catch(ePart) { console.warn('Einstimmig-PATCH fehlgeschlagen:', ePart.message); }
-
-          const remaining = _genD.filter(g => !approvals.includes(g.email.toLowerCase()));
-          const remainingNames = remaining.map(g => g.name || g.email);
-          showToast(`✓ Deine Zustimmung gespeichert. Noch ausstehend: ${remainingNames.join(', ')}`);
-
-          // Verbleibende Genehmiger per Mail benachrichtigen (außer dem Antragsteller)
-          if (remaining.length && _stD.benachrichtigung?.beiEinreichung !== false) {
-            const antragTitle = prevItem?.fields?.Title || '';
-            const approverName = account?.name || account?.username || '';
-            sendMail(
-              remaining.map(g => ({ address: g.email, name: g.name })),
-              `[KI-Antrag] ${antragTitle} – Zustimmung ausstehend`,
-              mailTemplate(
-                'Zustimmung zu einem KI-Antrag ausstehend',
-                [
-                  ['KI-System',    antragTitle],
-                  ['Zugestimmt',   approverName],
-                  ['Ausstehend',   remainingNames.join(', ')],
-                  ['Datum',        new Date().toLocaleDateString('de-DE')],
-                ],
-                '✓ Jetzt zustimmen',
-                `${location.origin}${location.pathname}?antrag=${itemId}`
-              )
-            ).catch(e => console.warn('Genehmiger-Reminder fehlgeschlagen:', e.message));
-          }
-
-          renderAntraege();
-          updateOpenBadge();
-          closePanel();
-          return;
-        }
-        // Alle haben zugestimmt → APPROVALS-Token aus Kommentar entfernen
-        newKommentar = newKommentar.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-      }
-    }
-  }
-
-  const fields = { [COL.status]: status };
-  if (newKommentar) fields[COL.gremiumKommentar] = newKommentar;
-  if (auflagen)  fields[COL.auflagen]         = auflagen;
-  if (status === 'Genehmigt') fields[COL.freigabeDatum] = new Date().toISOString().slice(0, 10);
+  // ── A/C: Buttons sperren + Settings einmalig laden ───────────────
+  const actionBtns = document.querySelectorAll('.panel-actions .btn');
+  actionBtns.forEach(b => { b.disabled = true; });
+  const st = loadSettings();   // einmalig – nicht mehrfach im Verlauf aufrufen
 
   try {
+    const status    = forceStatus || 'In Prüfung';
+    const kommentar = $id('pg-kommentar')?.value?.trim() || '';
+    const auflagen  = $id('pg-auflagen')?.value?.trim()  || '';
+
+    // ── B: Einmal .find() – überall wiederverwenden ───────────────
+    const prevItem      = allAntraege.find(i => i.id == itemId);
+    const antragAuthorG = (prevItem?.fields?.Author0EMail || '').toLowerCase();
+    const myEmail       = (account?.username || '').toLowerCase();
+
+    // Self-Approval-Guard
+    if (myEmail && antragAuthorG && myEmail === antragAuthorG &&
+        (status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage')) {
+      showToast('Eigene Anträge können nicht selbst genehmigt werden.', 'error');
+      return;
+    }
+
+    const prevKomRaw = prevItem?.fields?.[COL.gremiumKommentar] || '';
+    const now = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'})
+              + ' ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+
+    // Kommentar mit Zeitstempel voranstellen (APPROVALS-Token vorher entfernen)
+    const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+    let newKommentar = cleanBase;
+    if (kommentar) {
+      newKommentar = cleanBase
+        ? `[${now}] ${kommentar}\n──\n${cleanBase}`
+        : `[${now}] ${kommentar}`;
+    }
+
+    // ── Einstimmig-Modus: Teilzustimmung verfolgen ───────────────
+    if (status === 'Genehmigt') {
+      const modus  = st.benachrichtigung?.genehmigungsmodus || 'einstimmig';
+      if (modus === 'einstimmig') {
+        const genAll = st.genehmiger || [];
+        const genD   = genAll.filter(g => g.email.toLowerCase() !== antragAuthorG);
+        if (genD.length >= 1) {
+          const approvals = parseApprovals(prevKomRaw);
+          if (!approvals.includes(myEmail)) approvals.push(myEmail);
+          const allApproved = genD.every(g => approvals.includes(g.email.toLowerCase()));
+
+          if (!allApproved) {
+            // Noch nicht alle zugestimmt → Zwischenspeichern
+            const appToken   = `[APPROVALS:${approvals.join('|')}]`;
+            const partialKom = newKommentar ? `${appToken}\n${newKommentar}` : appToken;
+
+            // ── A: Mail NUR nach erfolgreichem PATCH senden ──────
+            await gPatch(
+              `/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`,
+              { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom }
+            );
+            const idx2 = allAntraege.findIndex(i => i.id == itemId);
+            if (idx2 >= 0) Object.assign(allAntraege[idx2].fields,
+              { [COL.status]: 'In Prüfung', [COL.gremiumKommentar]: partialKom });
+
+            const remaining     = genD.filter(g => !approvals.includes(g.email.toLowerCase()));
+            const remainingNames = remaining.map(g => g.name || g.email);
+            showToast(`✓ Zustimmung gespeichert. Noch ausstehend: ${remainingNames.join(', ')}`);
+
+            if (remaining.length && st.benachrichtigung?.beiEinreichung !== false) {
+              sendMail(
+                remaining.map(g => ({ address: g.email, name: g.name })),
+                `[KI-Antrag] ${prevItem?.fields?.Title || ''} – Zustimmung ausstehend`,
+                mailTemplate(
+                  'Zustimmung zu einem KI-Antrag ausstehend',
+                  [
+                    ['KI-System',  prevItem?.fields?.Title || ''],
+                    ['Zugestimmt', account?.name || myEmail],
+                    ['Ausstehend', remainingNames.join(', ')],
+                    ['Datum',      new Date().toLocaleDateString('de-DE')],
+                  ],
+                  '✓ Jetzt zustimmen',
+                  `${location.origin}${location.pathname}?antrag=${itemId}`
+                )
+              ).catch(e => console.warn('Genehmiger-Reminder fehlgeschlagen:', e.message));
+            }
+
+            renderAntraege();
+            updateOpenBadge();
+            closePanel();
+            return;
+          }
+          // Alle zugestimmt → Token ist bereits aus newKommentar raus (cleanBase oben)
+        }
+      }
+    }
+
+    // ── Finale Entscheidung speichern ────────────────────────────
+    const fields = { [COL.status]: status };
+    if (newKommentar) fields[COL.gremiumKommentar] = newKommentar;
+    if (auflagen)     fields[COL.auflagen]         = auflagen;
+    if (status === 'Genehmigt') fields[COL.freigabeDatum] = new Date().toISOString().slice(0, 10);
+
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
     if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
+
     const antragAfter = allAntraege.find(i => i.id == itemId);
     const savedName   = antragAfter?.fields?.Title || '';
     showToast(`✓ Entscheidung „${status}" gespeichert${savedName ? ' für ' + savedName : ''}.`);
 
-    // Antragsteller automatisch per Graph-Mail benachrichtigen (wenn konfiguriert + Statusentscheidung)
+    // ── A: Antragsteller-Mail NUR nach erfolgreichem PATCH ────────
     if ((status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage') && antragAfter) {
       const authorEmail = antragAfter.fields?.Author0EMail || '';
       const authorName  = antragAfter.fields?.Author0LookupValue || authorEmail;
-      const _st2 = loadSettings();
-      if (_st2.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
+      if (st.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
         const statusEmoji = status === 'Genehmigt' ? '✅' : status === 'Abgelehnt' ? '❌' : '❓';
-        const deepUrl = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
-        const infoRows = [
-          ['KI-System',     savedName],
-          ['Entscheidung',  `${statusEmoji} ${status}`],
-          ['Entscheider',   account?.name || account?.username || ''],
-          ['Datum',         new Date().toLocaleDateString('de-DE')],
+        const deepUrl     = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
+        const infoRows    = [
+          ['KI-System',    savedName],
+          ['Entscheidung', `${statusEmoji} ${status}`],
+          ['Entscheider',  account?.name || myEmail],
+          ['Datum',        new Date().toLocaleDateString('de-DE')],
         ];
         if (kommentar) infoRows.push(['Begründung', kommentar]);
         if (auflagen)  infoRows.push(['Auflagen / Bedingungen', auflagen]);
-
         sendMail(
           [{ address: authorEmail, name: authorName }],
           `[KI-Antrag] ${savedName} – ${status}`,
@@ -1373,13 +1370,11 @@ async function saveGremiumDecision(itemId, forceStatus) {
       }
     }
 
-    // Bei Genehmigung: automatisch Draft-Lizenz erstellen (falls noch keine existiert)
+    // Bei Genehmigung: automatisch Draft-Lizenz erstellen
     if (status === 'Genehmigt' && listLizenzId) {
-      const antrag = allAntraege.find(i => i.id == itemId);
-      const systemName = antrag?.fields?.Title;
+      const systemName = antragAfter?.fields?.Title;
       if (systemName) {
         try {
-          // Prüfen ob Lizenz schon vorhanden (lokal + ggf. remote)
           let lizenzen = allLizenzen;
           if (!lizenzen.length) {
             const d = await gGet(`/sites/${siteId}/lists/${listLizenzId}/items?$expand=fields($select=Title,${COL.kiSystem})&$top=999`);
@@ -1394,25 +1389,19 @@ async function saveGremiumDecision(itemId, forceStatus) {
             if (newLiz?.id) {
               const draftNote = '⚠ Automatisch erstellt – bitte Lizenzdetails ergänzen';
               const patchUrl  = `/sites/${siteId}/lists/${listLizenzId}/items/${newLiz.id}/fields`;
-
-              // COL.kiSystem ist ein Lookup auf KI_Register → kein Text-Write möglich.
-              // Der Lookup wird gesetzt, sobald der Register-Eintrag bei Lizenzierung erstellt wird.
-              // Title reicht für die Anzeige in der Zwischenzeit.
-
-              // Notizen setzen – mehrere Kandidaten durchprobieren
-              let notesSaved = false;
+              let notesSaved  = false;
               for (const nKey of [COL.notizen, 'Notizen', 'Notes', 'Bemerkungen']) {
                 if (lizenzCols && !lizenzCols.has(nKey)) continue;
                 try {
                   await gPatch(patchUrl, { [nKey]: draftNote });
-                  COL.notizen = nKey; // korrekten Namen merken
+                  COL.notizen = nKey;
                   notesSaved  = true;
                   break;
                 } catch(e) { console.warn('Auto-Lizenz Notizen (', nKey, '):', e.message); }
               }
               if (!notesSaved) console.warn('Auto-Lizenz: Notizen-Spalte konnte nicht gesetzt werden');
             }
-            allLizenzen = []; // Lizenz-Tab beim nächsten Öffnen neu laden
+            allLizenzen = [];
             console.log('✓ Draft-Lizenz automatisch erstellt:', systemName);
           }
         } catch(eLiz) {
@@ -1424,8 +1413,12 @@ async function saveGremiumDecision(itemId, forceStatus) {
     closePanel();
     renderAntraege();
     updateOpenBadge();
+
   } catch(e) {
     showToast('Fehler beim Speichern: ' + e.message, 'error');
+  } finally {
+    // ── D: Buttons immer wieder freigeben (auch bei Fehler) ──────
+    actionBtns.forEach(b => { b.disabled = false; });
   }
 }
 
