@@ -605,9 +605,9 @@ async function switchView(view) {
   if (activeView) { activeView.classList.remove('hidden'); activeView.classList.add('active'); }
   document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
 
-  if (view === 'antraege' && (Date.now() - _cacheTs.antraege > CACHE_TTL)) await loadAntraege();
-  if (view === 'lizenzen' && (Date.now() - _cacheTs.lizenzen > CACHE_TTL)) await loadLizenzen();
-  if (view === 'register' && (Date.now() - _cacheTs.register > CACHE_TTL)) await loadRegister();
+  if (view === 'antraege') await loadAntraege();
+  if (view === 'lizenzen') await loadLizenzen();
+  if (view === 'register') await loadRegister();
   if (view === 'einstellungen') renderEinstellungen();
 }
 
