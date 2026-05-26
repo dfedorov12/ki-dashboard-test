@@ -1040,21 +1040,14 @@ async function loadAntraege() {
   $id('antraege-list').innerHTML = '';
 
   try {
-    // Nicht-Gremium: nur eigene Items laden (server-seitig filtern → kein Fremddaten-Zugriff)
-    let apiUrl = `/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`;
-    if (!isGremium) {
-      const myEmailFilter = (account?.username || '').toLowerCase();
-      if (myEmailFilter) {
-        apiUrl += `&$filter=createdBy/user/email eq '${encodeURIComponent(myEmailFilter)}'`;
-      }
-    }
+    // Alle Items laden – client-seitig filtern (SP Graph-Filter mit encodeURIComponent('@') bricht den OData-Filter)
+    const apiUrl = `/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`;
     let data;
     try {
       data = await gGet(apiUrl);
-    } catch(filterErr) {
-      // Fallback: Graph-Filter nicht unterstützt → alles laden, client-seitig filtern
-      console.warn('Server-Filter nicht unterstützt, Fallback auf client-seitigen Filter:', filterErr.message);
-      data = await gGet(`/sites/${siteId}/lists/${listAntragId}/items?$expand=fields($select=*)&$top=999`);
+    } catch(loadErr) {
+      console.warn('Items-Abruf fehlgeschlagen:', loadErr.message);
+      throw loadErr;
     }
     // Client-seitig sortieren — vermeidet 400 bei nicht-indizierten Feldern
     allAntraege = (data.value || []).sort((a, b) => {
@@ -1260,8 +1253,10 @@ function openAntragPanel(itemId) {
         ${decidedBlock}
       ` : isDecided ? `
         ${decidedBlock}
-        <div style="margin-top:14px">
-          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Eingereicht')" title="Entscheidung zurücksetzen">↩ Zurücksetzen</button>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e5e9ef">
+          <button class="btn btn-neutral btn-sm" style="font-size:.75rem;opacity:.7"
+            onclick="if(confirm('Entscheidung wirklich zurücksetzen und Antrag auf „Eingereicht" setzen?')) saveGremiumDecision(${item.id},'Eingereicht')"
+            title="Entscheidung zurücksetzen – öffnet Bestätigungsdialog">↩ Zurücksetzen</button>
         </div>
       ` : `
         ${showApprovalTracker ? `
@@ -1464,6 +1459,14 @@ async function saveGremiumDecision(itemId, forceStatus) {
     const fields = { [COL.status]: status, [COL.gremiumKommentar]: newKommentar };
     if (auflagen) fields[COL.auflagen] = auflagen;
     if (status === 'Genehmigt') fields[COL.freigabeDatum] = new Date().toISOString().slice(0, 10);
+
+    // Diagnose: prüfe ob alle Spalten im SP-Schema vorhanden sind
+    if (antragCols) {
+      Object.keys(fields).forEach(k => {
+        if (!antragCols.has(k)) console.warn(`⚠️ saveGremiumDecision: Spalte "${k}" nicht in antragCols – wird SP ignorieren! Verfügbare Spalten: ${[...antragCols].sort().join(', ')}`);
+      });
+    }
+    console.log('saveGremiumDecision PATCH:', JSON.stringify(fields));
 
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
@@ -2656,14 +2659,21 @@ async function refreshPanel() {
   if (btn) { btn.disabled = true; btn.classList.add('refreshing'); }
   try {
     const fresh = await gGet(
-      `/sites/${siteId}/lists/${listAntragId}/items/${currentPanelItemId}?$expand=fields($select=*)`
+      `/sites/${siteId}/lists/${listAntragId}/items/${currentPanelItemId}?$select=id,createdBy,createdDateTime&$expand=fields($select=*)`
     );
     if (fresh?.fields) {
       const idx = allAntraege.findIndex(i => i.id == currentPanelItemId);
-      if (idx >= 0) allAntraege[idx].fields = fresh.fields;
-      else allAntraege.push({ id: currentPanelItemId, fields: fresh.fields });
+      if (idx >= 0) {
+        // createdBy aus Original-Item übernehmen (Graph gibt es bei Einzel-Item-Abruf nicht immer mit)
+        const originalCreatedBy = allAntraege[idx].createdBy;
+        allAntraege[idx].fields = fresh.fields;
+        if (originalCreatedBy && !fresh.createdBy) allAntraege[idx].createdBy = originalCreatedBy;
+      } else {
+        allAntraege.push({ id: currentPanelItemId, fields: fresh.fields, createdBy: fresh.createdBy });
+      }
     }
     openAntragPanel(currentPanelItemId);
+    showToast('Antrag aktualisiert');
   } catch(e) {
     showToast('Fehler beim Aktualisieren: ' + e.message, 'error');
   } finally {
