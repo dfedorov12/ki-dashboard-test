@@ -1021,7 +1021,8 @@ function renderAntraege() {
     if (f?.Title === SP_CONFIG_TITLE) return false;  // Internen Config-Eintrag ausblenden
     if (statusF && f[COL.status] !== statusF) return false;
     if (riskF   && f[COL.risiko] !== riskF)  return false;
-    if (!isGremium && myEmail && (f.Author0EMail || '').toLowerCase() !== myEmail) return false;
+    const itemAuthor = (f.Author0EMail || i.createdBy?.user?.email || '').toLowerCase();
+    if (!isGremium && myEmail && itemAuthor !== myEmail) return false;
     if (searchQ) {
       const hay = [f.Title, f[COL.hersteller], f[COL.verantw], f[COL.komponenten]].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(searchQ)) return false;
