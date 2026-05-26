@@ -1290,12 +1290,15 @@ async function saveGremiumDecision(itemId, forceStatus) {
     const displayName   = (account?.name || account?.username || '').trim();
     const nowAuthor     = displayName ? `${now} | ${displayName}` : now;
 
-    // Immer einen Log-Eintrag schreiben – mit Text oder Standardaktion
-    const actionLabels = { 'Genehmigt': '✓ Genehmigt', 'Abgelehnt': '✕ Abgelehnt',
-                           'Rückfrage': '❓ Rückfrage', 'In Prüfung': '🔍 In Prüfung',
-                           'Eingereicht': '📝 Status zurückgesetzt' };
+    // Immer Aktion + optionaler Kommentar darunter – Aktion nie weglassen
+    const actionLabels = { 'Genehmigt':   '✓ Antrag genehmigt.',
+                           'Abgelehnt':   '✕ Antrag abgelehnt.',
+                           'Rückfrage':   '❓ Rückfrage gestellt.',
+                           'In Prüfung':  '🔍 In Prüfung gesetzt.',
+                           'Eingereicht': '📝 Status zurückgesetzt.' };
     const cleanBase    = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-    const entryText    = kommentar || actionLabels[status] || status;
+    const actionLine   = actionLabels[status] || status;
+    const entryText    = kommentar ? `${actionLine}\n${kommentar}` : actionLine;
     const newKommentar = cleanBase
       ? `[${nowAuthor}] ${entryText}\n──\n${cleanBase}`
       : `[${nowAuthor}] ${entryText}`;
@@ -1323,7 +1326,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
           if (!allApproved) {
             // Noch nicht alle zugestimmt → Zwischenspeichern mit Verlaufseintrag
             const liveClean   = liveKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-            const partialText = kommentar || '✓ Zugestimmt';
+            const partialText = kommentar ? `✓ Zugestimmt.\n${kommentar}` : '✓ Zugestimmt.';
             const partialBody = liveClean
               ? `[${nowAuthor}] ${partialText}\n──\n${liveClean}`
               : `[${nowAuthor}] ${partialText}`;
