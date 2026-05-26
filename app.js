@@ -139,6 +139,7 @@ let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
 let spUserMap    = {};   // email.toLowerCase()/name → SP-LookupId (Integer)
+let spIdToEmail  = {};   // SP-LookupId (Integer) → email.toLowerCase() (Reverse-Map)
 // Gültige schreibbare Spaltennamen der Listen (wird in boot() befüllt)
 let antragCols   = null;
 let registerCols = null;
@@ -206,6 +207,34 @@ async function tryGetSpToken() {
   // Alle Scopes fehlgeschlagen → SP-REST nicht verfügbar, kein weiterer Versuch nötig
   _spTokenAvailable = false;
   return null;
+}
+
+// Alle SP-Site-User einmalig laden → spIdToEmail + spUserMap vollständig befüllen
+let _spIdMapBuilt = false;
+async function buildSpIdEmailMap() {
+  if (_spIdMapBuilt) return;
+  const token = await tryGetSpToken();
+  if (!token) return;
+  try {
+    const res = await fetch(
+      `https://${SP_HOST}${SP_SITE_PATH}/_api/web/siteusers?$select=Id,Title,Email&$top=500`,
+      { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json;odata=verbose' } }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const u of (data?.d?.results || [])) {
+      if (u.Id && u.Email) {
+        const id = parseInt(u.Id);
+        const em = u.Email.toLowerCase().trim();
+        spIdToEmail[id] = em;
+        spUserMap[em]   = id;
+      }
+    }
+    _spIdMapBuilt = true;
+    console.log('✓ spIdToEmail-Map gebaut:', Object.keys(spIdToEmail).length, 'Einträge');
+  } catch(e) {
+    console.warn('buildSpIdEmailMap fehlgeschlagen:', e.message);
+  }
 }
 
 // SP-User via ensureUser (SharePoint REST) auflösen → LookupId
@@ -1462,6 +1491,8 @@ async function loadLizenzen() {
     }
     console.log('✓ SP-User-Map nach Lizenzen-Seeding:', Object.keys(spUserMap).length, 'Einträge');
 
+    // UPN-Reverse-Map aufbauen (einmalig) → für UPN-Anzeige in der Listenansicht
+    buildSpIdEmailMap().then(() => renderLizenzen()).catch(() => {});
     renderLizenzen();
   } catch(e) {
     $id('lizenzen-loading').textContent = 'Fehler: ' + e.message;
@@ -1537,12 +1568,29 @@ function renderLizenzen() {
     const isDraft = (f[COL.notizen] || '').startsWith('⚠ Automatisch erstellt');
     const rowStyle = isDraft ? ' style="opacity:.55"' : '';
     const draftBadge = isDraft ? ' <span style="font-size:10px;color:#9ca3af;font-weight:400">(Entwurf)</span>' : '';
+
+    // UPN-Chips für zugewiesene Nutzer
+    const SHOW_MAX = 3;
+    const upnCell = (() => {
+      if (!users.length) return '<span style="color:#9ca3af;font-size:11px">–</span>';
+      const chips = users.slice(0, SHOW_MAX).map(u => {
+        const upn   = u.email || '';
+        const label = upn || u.name || '?';
+        const title = upn && u.name && upn !== u.name ? `${u.name} · ${upn}` : label;
+        return `<span class="upn-chip" title="${esc(title)}">${esc(label)}</span>`;
+      }).join('');
+      const more = users.length > SHOW_MAX
+        ? `<span class="upn-chip upn-chip-more">+${users.length - SHOW_MAX}</span>` : '';
+      return `<div class="upn-cell">${chips}${more}</div>`;
+    })();
+
     return `<tr onclick="openLizenzModal(${i.id})"${rowStyle}>
       <td><strong>${esc(f[COL.kiSystem] || f.Title || '–')}</strong>${draftBadge}</td>
       <td>${f[COL.lizenztyp] ? `<span class="badge-type">${esc(f[COL.lizenztyp])}</span>` : '–'}</td>
       <td>${esc(f[COL.anbieter] || '–')}</td>
       <td>${f[COL.kosten] ? fmtEuro(parseFloat(f[COL.kosten])) : '–'}</td>
       <td>${util}</td>
+      <td>${upnCell}</td>
       <td class="${endeCls}">${endeLabel}${diff !== null && diff < 60 && diff >= 0 ? ` <small>(${Math.round(diff)}d)</small>` : ''}</td>
       <td><span style="font-size:11px">${f[COL.autoRenewal] || '–'}</span></td>
     </tr>`;
@@ -1553,7 +1601,7 @@ function renderLizenzen() {
       <thead>
         <tr>
           <th>KI-System</th><th>Typ</th><th>Anbieter</th>
-          <th>Kosten</th><th>Auslastung</th><th>Vertragsende</th><th>Auto-Renewal</th>
+          <th>Kosten</th><th>Auslastung</th><th>Nutzer (UPN)</th><th>Vertragsende</th><th>Auto-Renewal</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1591,18 +1639,26 @@ function parseLizenzUsersWithIds(fields) {
   const names   = Array.isArray(nameVal) ? nameVal : (nameVal ? [nameVal] : []);
   const ids     = Array.isArray(idVal)   ? idVal   : (idVal   ? [idVal]   : []);
   if (!names.length && !ids.length) return [];
-  return names.map((n, i) => ({
-    name:  typeof n === 'string' ? n : (n?.LookupValue || String(n)),
-    email: '',
-    spId:  ids[i] ?? null
-  }));
+  return names.map((n, i) => {
+    const spId = ids[i] != null ? parseInt(ids[i]) : null;
+    const email = (spId ? spIdToEmail[spId] : '') || '';
+    return {
+      name:  typeof n === 'string' ? n : (n?.LookupValue || String(n)),
+      email,
+      spId,
+    };
+  });
 }
 
 // Einen User in die Map eintragen (Email + claims-Login + Anzeigename)
 function seedSpUser(id, email, loginName, displayName) {
   if (!id) return;
   const n = parseInt(id);
-  if (email)       spUserMap[email.toLowerCase().trim()]          = n;
+  if (email) {
+    const e = email.toLowerCase().trim();
+    spUserMap[e]   = n;
+    spIdToEmail[n] = e;   // Reverse-Map für UPN-Anzeige
+  }
   if (loginName && loginName.includes('|'))
                    spUserMap[loginName.split('|').pop().toLowerCase().trim()] = n;
   if (displayName) spUserMap['__name__' + displayName.toLowerCase().trim()]   = n;
