@@ -135,6 +135,7 @@ let isAdmin         = false;  // Nur administrator@dihag.com → Einstellungen-T
 const ADMIN_UPN     = 'administrator@dihag.com';
 let allAntraege = [], allLizenzen = [], allRegister = [];
 let currentView = 'antraege';
+let currentPanelItemId = null;   // aktuell geöffnetes Antrag-Panel
 let editLizenzId = null;
 // lizenzUsers: [{name: string, email: string, spId: number|null}]
 let lizenzUsers = [];
@@ -1070,6 +1071,7 @@ function updateOpenBadge() {
 function openAntragPanel(itemId) {
   const item = allAntraege.find(i => i.id == itemId);
   if (!item) return;
+  currentPanelItemId = itemId;
   if (item.fields?.Title === SP_CONFIG_TITLE) return;  // Config-Item nicht öffnen
   const f = item.fields;
 
@@ -1347,16 +1349,21 @@ async function saveGremiumDecision(itemId, forceStatus) {
             showToast(`✓ Zustimmung gespeichert. Noch ausstehend: ${remainingNames.join(', ')}`);
 
             if (remaining.length && st.benachrichtigung?.beiEinreichung !== false) {
+              // Alle bisher Zugestimmten für die Mail zusammenstellen
+              const approvedNames = approvals.map(email => {
+                const g = genAll.find(x => x.email.toLowerCase() === email.toLowerCase());
+                return g?.name || email;
+              });
               sendMail(
                 remaining.map(g => ({ address: g.email, name: g.name })),
                 `[KI-Antrag] ${prevItem?.fields?.Title || ''} – Zustimmung ausstehend`,
                 mailTemplate(
                   'Zustimmung zu einem KI-Antrag ausstehend',
                   [
-                    ['KI-System',  prevItem?.fields?.Title || ''],
-                    ['Zugestimmt', account?.name || myEmail],
-                    ['Ausstehend', remainingNames.join(', ')],
-                    ['Datum',      new Date().toLocaleDateString('de-DE')],
+                    ['KI-System',    prevItem?.fields?.Title || ''],
+                    ['Bereits zugestimmt', approvedNames.join(', ')],
+                    ['Noch ausstehend',    remainingNames.join(', ')],
+                    ['Datum',        new Date().toLocaleDateString('de-DE')],
                   ],
                   '✓ Jetzt zustimmen',
                   `${location.origin}${location.pathname}?antrag=${itemId}`
@@ -1391,17 +1398,31 @@ async function saveGremiumDecision(itemId, forceStatus) {
     if ((status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage') && antragAfter) {
       const authorEmail = antragAfter.fields?.Author0EMail || '';
       const authorName  = antragAfter.fields?.Author0LookupValue || authorEmail;
+      const deepUrl     = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
+
       if (st.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
         const statusEmoji = status === 'Genehmigt' ? '✅' : status === 'Abgelehnt' ? '❌' : '❓';
-        const deepUrl     = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
-        const infoRows    = [
+        // Alle Genehmiger die zugestimmt haben (aus finalem Kommentar / aktuellem Approver)
+        const allGenehmigerCfg = st.genehmiger || [];
+        const finalApprovals   = parseApprovals(antragAfter.fields?.[COL.gremiumKommentar] || '');
+        const allApprovedNames = status === 'Genehmigt' && finalApprovals.length
+          ? finalApprovals.map(e => {
+              const g = allGenehmigerCfg.find(x => x.email.toLowerCase() === e.toLowerCase());
+              return g?.name || e;
+            })
+          : [account?.name || myEmail];
+
+        const infoRows = [
           ['KI-System',    savedName],
           ['Entscheidung', `${statusEmoji} ${status}`],
           ['Entscheider',  account?.name || myEmail],
           ['Datum',        new Date().toLocaleDateString('de-DE')],
         ];
+        if (status === 'Genehmigt' && allApprovedNames.length > 1)
+          infoRows.push(['Zugestimmt von', allApprovedNames.join(', ')]);
         if (kommentar) infoRows.push(['Begründung', kommentar]);
         if (auflagen)  infoRows.push(['Auflagen / Bedingungen', auflagen]);
+
         sendMail(
           [{ address: authorEmail, name: authorName }],
           `[KI-Antrag] ${savedName} – ${status}`,
@@ -1416,6 +1437,36 @@ async function saveGremiumDecision(itemId, forceStatus) {
            console.warn('Mail an Antragsteller fehlgeschlagen:', e.message);
            showToast('Entscheidung gespeichert – E-Mail fehlgeschlagen: ' + e.message, 'error', 7000);
          });
+      }
+
+      // ── Abschluss-Mail an alle Genehmiger bei finaler Genehmigung ──
+      if (status === 'Genehmigt' && st.benachrichtigung?.beiEntscheidung !== false) {
+        const allGenehmigerCfg = st.genehmiger || [];
+        const finalApprovals   = parseApprovals(antragAfter.fields?.[COL.gremiumKommentar] || '');
+        const allApprovedNames = finalApprovals.length
+          ? finalApprovals.map(e => {
+              const g = allGenehmigerCfg.find(x => x.email.toLowerCase() === e.toLowerCase());
+              return g?.name || e;
+            })
+          : [account?.name || myEmail];
+        const genehmigerRecipients = allGenehmigerCfg.filter(g => g.email.toLowerCase() !== myEmail);
+        if (genehmigerRecipients.length) {
+          sendMail(
+            genehmigerRecipients.map(g => ({ address: g.email, name: g.name })),
+            `[KI-Antrag] ${savedName} – ✅ Einstimmig genehmigt`,
+            mailTemplate(
+              'KI-Antrag wurde einstimmig genehmigt',
+              [
+                ['KI-System',        savedName],
+                ['Zugestimmt von',   allApprovedNames.join(', ')],
+                ['Freigabedatum',    new Date().toLocaleDateString('de-DE')],
+                ...(auflagen ? [['Auflagen', auflagen]] : []),
+              ],
+              '📋 Antrag anzeigen',
+              deepUrl
+            )
+          ).catch(e => console.warn('Abschluss-Mail an Genehmiger fehlgeschlagen:', e.message));
+        }
       }
     }
 
@@ -2517,6 +2568,27 @@ function openPanel() {
 function closePanel() {
   $id('panel-overlay').classList.add('hidden');
   $id('side-panel').classList.add('hidden');
+  currentPanelItemId = null;
+}
+async function refreshPanel() {
+  if (!currentPanelItemId || !listAntragId) return;
+  const btn = $id('btn-panel-refresh');
+  if (btn) { btn.disabled = true; btn.classList.add('refreshing'); }
+  try {
+    const fresh = await gGet(
+      `/sites/${siteId}/lists/${listAntragId}/items/${currentPanelItemId}?$expand=fields($select=*)`
+    );
+    if (fresh?.fields) {
+      const idx = allAntraege.findIndex(i => i.id == currentPanelItemId);
+      if (idx >= 0) allAntraege[idx].fields = fresh.fields;
+      else allAntraege.push({ id: currentPanelItemId, fields: fresh.fields });
+    }
+    openAntragPanel(currentPanelItemId);
+  } catch(e) {
+    showToast('Fehler beim Aktualisieren: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('refreshing'); }
+  }
 }
 // closeModal is defined above (next to openRichtlinieModal) to support modal-wide cleanup
 
