@@ -134,6 +134,9 @@ let canReadLizenzen = false;  // Fallback-Flag: SP-Lizenzen lesbar (für leere S
 let isAdmin         = false;  // Nur administrator@dihag.com → Einstellungen-Tab
 const ADMIN_UPN     = 'administrator@dihag.com';
 let allAntraege = [], allLizenzen = [], allRegister = [];
+// Genehmiger-Liste: immer aus SP geladen (nicht aus localStorage), daher nie stale
+let _genehmigerLive = null;   // wird in boot() aus SP befüllt, bei Einstellungsänderung aktualisiert
+function getGenehmiger() { return _genehmigerLive || loadSettings().genehmiger || []; }
 let currentView = 'antraege';
 let currentPanelItemId = null;   // aktuell geöffnetes Antrag-Panel
 let editLizenzId = null;
@@ -498,6 +501,7 @@ async function boot() {
       if (cfgItem?.fields?.[COL.gremiumKommentar]) {
         const spGen = JSON.parse(cfgItem.fields[COL.gremiumKommentar]);
         if (Array.isArray(spGen) && spGen.length > 0) {
+          _genehmigerLive = spGen;   // immer frisch aus SP – kein localStorage-Fallback nötig
           const local = loadSettings();
           local.genehmiger = spGen;
           saveSettingsData(local);
@@ -513,7 +517,7 @@ async function boot() {
     // Fallback: wenn noch keine Liste konfiguriert → SP-Lizenzen-Zugriff (Bootstrapping)
     isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
     const _myUpn  = (account?.username || '').toLowerCase();
-    const _genCfg = loadSettings().genehmiger || [];
+    const _genCfg = getGenehmiger();   // nutzt _genehmigerLive (aus SP) falls bereits geladen
     if (_genCfg.length > 0) {
       isGremium = isAdmin || _genCfg.some(g => (g.email || '').toLowerCase() === _myUpn);
     } else {
@@ -940,7 +944,7 @@ async function submitAntrag(e) {
     // Genehmiger-Feld aus Einstellungen befüllen (Person-Mehrfachauswahl)
     if (COL.genehmiger && colOk(COL.genehmiger)) {
       try {
-        const _genList = loadSettings().genehmiger || [];
+        const _genList = getGenehmiger();
         const genIds = [];
         for (const g of _genList) {
           const id = await resolveSpUserId(g.email, g.name);
@@ -978,7 +982,7 @@ async function submitAntrag(e) {
     // Genehmiger automatisch per Graph-Mail benachrichtigen (wenn konfiguriert)
     // Antragsteller aus der Empfängerliste ausschließen – kein Self-Notify
     const _st = loadSettings();
-    const _gen = _st.genehmiger || [];
+    const _gen = getGenehmiger();
     const _myEmail = (account?.username || '').toLowerCase();
     const _genToNotify = _gen.filter(g => g.email.toLowerCase() !== _myEmail);
     if (_st.benachrichtigung?.beiEinreichung !== false && _genToNotify.length) {
@@ -1154,8 +1158,7 @@ function openAntragPanel(itemId) {
     </div>`;
 
   // Genehmiger aus aktuellen Einstellungen lesen (nicht aus SP-Item – dort stehen ggf. veraltete Namen)
-  const _stForPanel   = loadSettings();
-  const genehmigerNames = (_stForPanel.genehmiger || []).map(g => g.name || g.email).filter(Boolean).join(', ');
+  const genehmigerNames = getGenehmiger().map(g => g.name || g.email).filter(Boolean).join(', ');
 
   const rows1 = `
     <div class="panel-section">
@@ -1184,7 +1187,7 @@ function openAntragPanel(itemId) {
   // Einstimmig-Modus: Abstimmungsstand aus GremiumKommentar lesen
   const _stPanel       = loadSettings();
   const einstimmig     = (_stPanel.benachrichtigung?.genehmigungsmodus || 'einstimmig') === 'einstimmig';
-  const _genPanel      = _stPanel.genehmiger || [];
+  const _genPanel      = getGenehmiger();
   const panelApprovals = parseApprovals(f[COL.gremiumKommentar]);
   const myEmailPanel   = (account?.username || '').toLowerCase();
 
@@ -1329,7 +1332,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
   // ── A/C: Buttons sperren + Settings einmalig laden ───────────────
   const actionBtns = document.querySelectorAll('.panel-actions .btn');
   actionBtns.forEach(b => { b.disabled = true; });
-  const st = loadSettings();   // einmalig – nicht mehrfach im Verlauf aufrufen
+  const st = { ...loadSettings(), genehmiger: getGenehmiger() };  // Genehmiger immer frisch aus SP-Cache
 
   try {
     const status    = forceStatus || 'In Prüfung';
@@ -2911,6 +2914,7 @@ function loadSettings() {
   try { return JSON.parse(localStorage.getItem('ki_settings') || '{}'); } catch { return {}; }
 }
 function saveSettingsData(data) {
+  if (data.genehmiger) _genehmigerLive = data.genehmiger;
   localStorage.setItem('ki_settings', JSON.stringify(data));
   // Bei Admin-Speicherung: Genehmiger-Liste auch in SP sichern (browserübergreifend)
   if (isAdmin && data.genehmiger) {
