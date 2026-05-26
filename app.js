@@ -1212,7 +1212,7 @@ function openAntragPanel(itemId) {
           <label class="form-label">Neuer Kommentar <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
           <textarea id="pg-kommentar" class="form-control" rows="2" maxlength="1000"
             style="resize:none;overflow:hidden;min-height:60px"
-            oninput="this.style.height='auto';this.style.height=Math.max(60,this.scrollHeight)+'px';$id('pg-kom-count').textContent=this.value.length+'/1000'"
+            oninput="this.style.height='auto';this.style.height=Math.max(60,this.scrollHeight)+'px';$id('pg-kom-count').textContent=this.value.length+'/1000';const _rb=$id('btn-rueckfrage');if(_rb)_rb.disabled=!this.value.trim();"
             placeholder="Neuen Kommentar eingeben…"></textarea>
           <div style="text-align:right;font-size:.71rem;color:#9ca3af;margin-top:3px"><span id="pg-kom-count">0/1000</span></div>
         </div>
@@ -1223,7 +1223,7 @@ function openAntragPanel(itemId) {
         <div class="panel-actions">
           <button class="btn btn-success btn-sm" ${myApprovedAlready ? 'disabled' : ''} onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
           <button class="btn btn-danger btn-sm"  onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
-          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
+          <button id="btn-rueckfrage" class="btn btn-neutral btn-sm" disabled title="Bitte zuerst einen Kommentar eingeben" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
           <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
         </div>
         ${einstimmig ? '<div style="font-size:.75rem;color:#6b7280;margin-top:6px">ℹ️ Eine Ablehnung ist sofort final – unabhängig vom Einstimmig-Modus.</div>' : ''}
