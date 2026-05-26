@@ -631,10 +631,10 @@ async function refreshCurrentView() {
 // ANTRAG FORM
 // ═══════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════
-// KI-RICHTLINIE MODAL (CO-10-01 – Entwurf Mai 2026)
+// KI-RICHTLINIE MODAL (CO-10-01 – Version 1.0, Inkrafttreten 01.06.2026)
 // ═══════════════════════════════════════════════════════════════════
 function openRichtlinieModal() {
-  $id('modal-title').textContent = 'KI-Richtlinie CO-10-01 – Nutzung von KI-Anwendungen (Entwurf)';
+  $id('modal-title').textContent = 'KI-Richtlinie CO-10-01 – Richtlinie zur Nutzung von KI-Anwendungen';
   $id('modal-card').classList.add('modal-wide');
   $id('modal-body').innerHTML = `
 <div class="rdoc">
@@ -642,10 +642,11 @@ function openRichtlinieModal() {
   <div class="rdoc-meta-table">
     <table>
       <tr><td>Nummerierung</td><td><strong>CO-10-01</strong></td><td>Kurzbezeichnung</td><td><strong>KI-Richtlinie</strong></td></tr>
-      <tr><td>Version</td><td>1.0 (Entwurf)</td><td>Verantwortlich</td><td>Chief Compliance Officer</td></tr>
-      <tr><td>Genehmiger</td><td colspan="3">Dr. Alex Lissitsa · Viktor Babushchak · Dr. Hans-Jürgen Brenninger · Robert Schüller</td></tr>
+      <tr><td>Version</td><td>1.0</td><td>Verantwortlich</td><td>Chief Compliance Officer</td></tr>
+      <tr><td>Inkrafttreten</td><td>01.06.2026</td><td>Wiedervorlage</td><td>03/2027</td></tr>
+      <tr><td>Genehmiger</td><td colspan="3">Dr. Alex Lissitsa (CEO) · Viktor Babushchak (COO)</td></tr>
       <tr><td>Geltungsbereich</td><td colspan="3">Geschäftsleitung, Führungskräfte, alle Mitarbeitenden der DIHAG-Gruppe</td></tr>
-      <tr><td>Übergeordnet</td><td colspan="3">CO-01-01 Code of Conduct</td></tr>
+      <tr><td>Übergeordnet</td><td colspan="3">CO-01-01 Verhaltenskodex – <a href="javascript:void(0)" onclick="closeModal();openVerhaltenskodexModal();" style="color:#4338ca">Verhaltenskodex lesen →</a></td></tr>
     </table>
   </div>
 
@@ -750,7 +751,7 @@ function openRichtlinieModal() {
   </table>
 
   <p style="margin-top:20px;font-size:.78rem;color:#9ca3af;border-top:1px solid #e5e9ef;padding-top:12px">
-    Entwurf Stand 05.05.2026 · Ansprechpartner: Karl Würz, ext. Chief Compliance Officer (wuerz@dihag.com)
+    Version 1.0 · Inkrafttreten 01.06.2026 · Ansprechpartner: Karl Würz, ext. Chief Compliance Officer (wuerz@dihag.com)
   </p>
 </div>`;
   $id('modal-overlay').classList.remove('hidden');
@@ -760,6 +761,81 @@ function closeModal(e) {
   if (e && e.target !== $id('modal-overlay')) return;
   $id('modal-overlay').classList.add('hidden');
   $id('modal-card').classList.remove('modal-wide');
+}
+
+// VERHALTENSKODEX MODAL (CO-01-01 – Version 1.2, Inkrafttreten 01.06.2026)
+// ═══════════════════════════════════════════════════════════════════
+function openVerhaltenskodexModal() {
+  $id('modal-title').textContent = 'Verhaltenskodex CO-01-01 – DIHAG Holding GmbH';
+  $id('modal-card').classList.add('modal-wide');
+  $id('modal-body').innerHTML = `
+<div class="rdoc">
+
+  <div class="rdoc-meta-table">
+    <table>
+      <tr><td>Nummerierung</td><td><strong>CO-01-01</strong></td><td>Kurzbezeichnung</td><td><strong>Verhaltenskodex</strong></td></tr>
+      <tr><td>Version</td><td>1.2</td><td>Verantwortlich</td><td>Chief Compliance Officer</td></tr>
+      <tr><td>Inkrafttreten</td><td>Juni 2026</td><td>Wiedervorlage</td><td>06/2027</td></tr>
+      <tr><td>Genehmiger</td><td colspan="3">Dr. Alex Lissitsa (CEO) · Viktor Babushchak (COO)</td></tr>
+      <tr><td>Geltungsbereich</td><td colspan="3">Geschäftsleitung, alle Führungskräfte Ebenen 1–3, alle Mitarbeiter der DIHAG Holding GmbH sowie aller Gruppengesellschaften</td></tr>
+      <tr><td>Nachgeordnet</td><td colspan="3">Alle Compliance-Richtlinien (inkl. CO-10-01 KI-Richtlinie)</td></tr>
+    </table>
+  </div>
+
+  <h3>Unsere Kompetenzen</h3>
+  <p>In der DIHAG HOLDING GmbH haben sich verschiedene traditionsreiche Gießereien zu einem leistungsstarken Unternehmensverbund zusammengeschlossen. Alle Gesellschaften verbindet ein gemeinsames Ziel: Technologieführerschaft bei höchster Qualität und größter Flexibilität.</p>
+
+  <h3>Verbindliche Anforderungen für alle Mitarbeiter</h3>
+  <p>Mitarbeiter müssen die einschlägigen Gesetze und behördlichen Vorschriften beachten sowie interne Anweisungen und Richtlinien einhalten. Konflikte zwischen privaten und geschäftlichen Interessen sind zu vermeiden.</p>
+  <p>Alle Mitarbeiter werden ausdrücklich ermutigt, den Compliance-Ansprechpartner oder ihren Vorgesetzten anzusprechen, wenn sie regelwidriges Verhalten feststellen. Mitteilungen können auch anonym über das elektronische Hinweisgebersystem erfolgen.</p>
+
+  <h3>Menschenrechte &amp; Lieferkette</h3>
+  <p>DIHAG garantiert die Einhaltung der allgemein anerkannten Menschenrechte und erwartet auch von Lieferanten sichere und faire Arbeitsbedingungen gemäß dem nationalen Lieferkettensorgfaltspflichtengesetz.</p>
+
+  <h3>Diskriminierungsverbot</h3>
+  <p>DIHAG duldet keinerlei Diskriminierung oder Belästigung – weder aus rassistischen Gründen noch aufgrund von Herkunft, Alter, Behinderung, Geschlecht, politischer Haltung, Religion oder sexueller Orientierung.</p>
+
+  <h3>Schutz personenbezogener Daten &amp; vertraulicher Informationen</h3>
+  <p>Personenbezogene Daten dürfen nur erhoben und verarbeitet werden, soweit dies erforderlich und zulässig ist. Vertrauliche Informationen müssen vor dem Einblick Dritter geschützt werden. Auf die Datenschutz- und IT-Sicherheitsrichtlinien wird ausdrücklich hingewiesen.</p>
+
+  <h3>Keine Interessenkonflikte</h3>
+  <p>Nebentätigkeiten, Beteiligungen an anderen Unternehmen sowie Organmitgliedschaften bei Kunden oder Geschäftspartnern bedürfen der vorherigen schriftlichen Zustimmung der Geschäftsleitung. In Zweifelsfällen ist der Chief Compliance Officer einzuschalten.</p>
+
+  <h3>Geschenke, Geschäftsessen &amp; Veranstaltungen</h3>
+  <p>Geschenke und Einladungen dürfen nie dazu dienen, unlautere geschäftliche Vorteile zu erlangen. Die Einzelheiten regelt die Anti-Korruptionsrichtlinie.</p>
+
+  <h3>Keine Tolerierung von Korruption</h3>
+  <p>DIHAG toleriert keinerlei Form von Bestechung, Vorteilsannahme oder Vorteilsgewährung. Bereits das Versprechen oder Fordern unlauterer Vorteile kann strafbar sein.</p>
+
+  <h3>Schutz des Wettbewerbs</h3>
+  <p>DIHAG beteiligt sich nicht an illegalen wettbewerbsbeschränkenden Vereinbarungen (Absprachen über Preise, Konditionen oder Marktaufteilung). Bei Kontakten zu Wettbewerbern sind interne Angelegenheiten ohne vorherige Abklärung mit Compliance nicht zu besprechen.</p>
+
+  <h3>Schutz des Unternehmensvermögens &amp; natürlicher Ressourcen</h3>
+  <p>Betriebseinrichtungen und Arbeitsmittel dürfen nicht zu privaten Zwecken missbraucht werden. Mitarbeiter sind angehalten, natürliche Ressourcen zu schonen (Materialeinsparung, Recycling, energiesparende Planung).</p>
+
+  <h3>Konsequenzen bei Verstößen <span class="rdoc-highlight">← relevant für KI-Nutzung (CO-10-01 § 4)</span></h3>
+  <p>Verstöße können erhebliche Reputationsverluste sowie arbeits-, zivil- und strafrechtliche Nachteile zur Folge haben – bis hin zu Bußgeldern oder Strafverfahren. Art und Umfang der Sanktion richten sich nach Schwere, Häufigkeit und Vorsatz. Eine frühzeitige Meldung wirkt sanktionsmildernd.</p>
+
+  <h3>Compliance-Ansprechpartner</h3>
+  <table class="rdoc-anlage">
+    <thead><tr><th>Funktion</th><th>Name</th><th>Kontakt</th></tr></thead>
+    <tbody>
+      <tr><td>Chief Compliance Officer (CCO)</td><td>Karl Würz (ext.)</td><td>wuerz@dihag.com · 00800 3053 0530</td></tr>
+      <tr><td>Compliance WGC / LEG</td><td>Alexandra Rauch</td><td>rauch@dihag.com</td></tr>
+      <tr><td>Compliance MEG / SHB</td><td>Enrico Lehnert</td><td>lehnert@dihag.com</td></tr>
+      <tr><td>Compliance SCH</td><td>Henning Gößtz</td><td>goeoetz@dihag.com</td></tr>
+      <tr><td>Compliance EWA</td><td>Emily Taute</td><td>etaute@ewa-guss.de</td></tr>
+      <tr><td>Compliance DGH</td><td>Wolfgang Lohr</td><td>lohr@dihag.com</td></tr>
+      <tr><td>Compliance EMH</td><td>Evelyn Bella</td><td>bella@eurometall.com</td></tr>
+      <tr><td>Compliance OZB</td><td>Tomasz Szymanowicz</td><td>tsz@odlewnia.com.pl</td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top:20px;font-size:.78rem;color:#9ca3af;border-top:1px solid #e5e9ef;padding-top:12px">
+    Version 1.2 · Inkrafttreten Juni 2026 · Düsseldorf, 01.06.2026 · Ansprechpartner: Karl Würz, ext. Chief Compliance Officer (wuerz@dihag.com)
+  </p>
+</div>`;
+  $id('modal-overlay').classList.remove('hidden');
 }
 
 function renderAntragForm() {
