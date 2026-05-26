@@ -1061,13 +1061,7 @@ function renderAntraege() {
 }
 
 function updateOpenBadge() {
-  const open = allAntraege.filter(i =>
-    i.fields?.Title !== SP_CONFIG_TITLE &&
-    ['Eingereicht', 'In Prüfung', 'Rückfrage'].includes(i.fields?.[COL.status])
-  ).length;
-  const b = $id('badge-open');
-  if (open) { b.textContent = open; b.classList.remove('hidden'); }
-  else b.classList.add('hidden');
+  // Badge deaktiviert
 }
 
 // ═══════════════════════════════════════════════════════════════════
