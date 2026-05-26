@@ -2763,7 +2763,7 @@ function $id(id) { return document.getElementById(id); }
 // Konvertiert Formulareingabe in den von der Graph API erwarteten Typ
 function spValue(type, v) {
   if (type === 'number') return parseFloat(v);
-  if (type === 'date')   return v ? new Date(v).toISOString() : null;
+  if (type === 'date')   return v ? v : null;  // HTML-Datumseingabe liefert bereits 'YYYY-MM-DD' – kein Umweg über new Date() (erzeugt '+022222-...' für weit entfernte Jahre)
   // yesno: SP-Boolean-Spalten erwarten true/false, wir zeigen 'Ja'/'Nein'
   if (type === 'yesno')  return v === 'Ja' ? true : v === 'Nein' ? false : null;
   return v;
