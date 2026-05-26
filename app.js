@@ -2719,17 +2719,29 @@ async function refreshPanel() {
 // ═══════════════════════════════════════════════════════════════════
 // toList: [{address, name}] oder ['email@...'] oder 'email@...'
 async function sendMail(toList, subject, bodyHtml) {
+  // Erlaubte Empfänger-Domains: nur interne DIHAG-Adressen
+  // Verhindert dass eine manipulierte Genehmiger-Liste externe Adressen erreicht
+  const ALLOWED_MAIL_DOMAINS = new Set(['dihag.com']);
   const toArr = (Array.isArray(toList) ? toList : [toList]).map(r =>
     typeof r === 'string'
       ? { emailAddress: { address: r } }
       : { emailAddress: { address: r.address || r.email || '', name: r.name || '' } }
-  ).filter(r => r.emailAddress.address);
+  ).filter(r => {
+    const addr = (r.emailAddress.address || '').toLowerCase();
+    const domain = addr.includes('@') ? addr.split('@').pop() : '';
+    const ok = ALLOWED_MAIL_DOMAINS.has(domain);
+    if (!ok) console.warn('sendMail: Empfänger-Domain nicht erlaubt, übersprungen:', addr);
+    return ok;
+  });
 
   if (!toArr.length) { console.warn('sendMail: keine Empfänger'); return; }
 
+  // Betreff: Zeilenumbrüche entfernen (verhindert E-Mail-Header-Injection)
+  const safeSubject = String(subject).replace(/[\r\n]+/g, ' ').trim();
+
   await gPost('/me/sendMail', {
     message: {
-      subject,
+      subject: safeSubject,
       body: { contentType: 'HTML', content: bodyHtml },
       toRecipients: toArr,
     },
@@ -2739,16 +2751,20 @@ async function sendMail(toList, subject, bodyHtml) {
 }
 
 // HTML-Template für KI-Benachrichtigungs-Mails
+// SICHERHEIT: Alle dynamischen Werte (title, k, v) werden per esc() escaped –
+// verhindert HTML-Injection / Phishing durch manipulierte Antragstitel oder Kommentare.
 function mailTemplate(title, lines, ctaLabel, ctaUrl) {
-  const href = ctaUrl || (location.origin + location.pathname);
+  // CTA-URL muss ein interner Deep-Link sein (beginnt mit unserem Origin)
+  const safeOrigin = location.origin + location.pathname;
+  const href = (ctaUrl && ctaUrl.startsWith(safeOrigin)) ? ctaUrl : safeOrigin;
   const cta = ctaLabel
     ? `<p style="margin:24px 0 0"><a href="${href}"
         style="background:#1a56db;color:#fff;padding:10px 22px;border-radius:7px;text-decoration:none;font-weight:600"
-        >${ctaLabel}</a></p>`
+        >${esc(ctaLabel)}</a></p>`
     : '';
   const rows = lines.map(([k, v]) =>
-    `<tr><td style="padding:5px 0;color:#6b7280;font-size:13px;width:160px">${k}</td>
-         <td style="padding:5px 0;font-size:13px;font-weight:500">${v}</td></tr>`
+    `<tr><td style="padding:5px 0;color:#6b7280;font-size:13px;width:160px">${esc(String(k))}</td>
+         <td style="padding:5px 0;font-size:13px;font-weight:500;white-space:pre-wrap">${esc(String(v ?? ''))}</td></tr>`
   ).join('');
   return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:24px">
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e9ef">
@@ -2756,7 +2772,7 @@ function mailTemplate(title, lines, ctaLabel, ctaUrl) {
       <div style="color:#fff;font-size:18px;font-weight:700">🤖 KI-Dashboard · DIHAG Gruppe</div>
     </div>
     <div style="padding:24px 28px">
-      <h2 style="margin:0 0 18px;font-size:16px;color:#1e2939">${title}</h2>
+      <h2 style="margin:0 0 18px;font-size:16px;color:#1e2939">${esc(title)}</h2>
       <table style="border-collapse:collapse;width:100%">${rows}</table>
       ${cta}
     </div>
