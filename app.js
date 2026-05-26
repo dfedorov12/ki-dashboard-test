@@ -1117,7 +1117,7 @@ function openAntragPanel(itemId) {
     <div class="panel-section">
       <div class="panel-section-title">Status</div>
       ${row('Aktueller Status', statusBadge(f[COL.status]))}
-      ${kommentarClean ? row('Gremium-Kommentar', esc(kommentarClean), true) : ''}
+      ${kommentarClean ? `<tr><td class="panel-field-label" style="vertical-align:top;padding-top:6px">Gremium-Kommentar</td><td>${renderKommentarLog(kommentarClean)}</td></tr>` : ''}
       ${f[COL.auflagen]         ? row('Auflagen',           esc(f[COL.auflagen]), true) : ''}
       ${f[COL.freigabeDatum]    ? row('Freigabedatum',      fmtDate(f[COL.freigabeDatum])) : ''}
     </div>` : '';
@@ -1126,7 +1126,7 @@ function openAntragPanel(itemId) {
   const rueckfrageSection = (!isGremium && f[COL.status] === 'Rückfrage') ? `
     <div style="background:#faf5ff;border:1.5px solid #d8b4fe;border-radius:10px;padding:16px;margin-top:12px">
       <div style="font-size:.8rem;font-weight:700;color:#7e22ce;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">💬 Rückfrage des Gremiums</div>
-      ${f[COL.gremiumKommentar] ? `<div style="background:#fff;border:1px solid #e9d5ff;border-radius:7px;padding:10px 12px;font-size:.85rem;color:#1e2939;white-space:pre-wrap;margin-bottom:14px">${esc(f[COL.gremiumKommentar])}</div>` : ''}
+      ${kommentarClean ? `<div style="background:#fff;border:1px solid #e9d5ff;border-radius:7px;padding:0 12px;margin-bottom:14px">${renderKommentarLog(kommentarClean)}</div>` : ''}
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">Ihre Antwort</label>
         <textarea id="rueck-antwort" class="form-control" rows="3" placeholder="Bitte beantworten Sie die Rückfrage hier…"></textarea>
@@ -1160,8 +1160,10 @@ function openAntragPanel(itemId) {
     </div>
     ${kommentarClean ? `
       <div style="margin-bottom:10px">
-        <div class="panel-field-label">Begründung</div>
-        <div class="panel-field-value pre" style="background:#f9fafb;padding:8px 10px;border-radius:7px;border:1px solid #e5e9ef">${esc(kommentarClean)}</div>
+        <div class="panel-field-label" style="margin-bottom:6px">Verlauf</div>
+        <div style="border:1px solid #e5e9ef;border-radius:8px;padding:0 12px;background:#fafafa">
+          ${renderKommentarLog(kommentarClean)}
+        </div>
       </div>` : ''}
     ${f[COL.auflagen] ? `
       <div>
@@ -1281,14 +1283,15 @@ async function saveGremiumDecision(itemId, forceStatus) {
     const displayName   = (account?.name || account?.username || '').trim();
     const nowAuthor     = displayName ? `${now} | ${displayName}` : now;
 
-    // Kommentar mit Zeitstempel + Autor voranstellen (APPROVALS-Token vorher entfernen)
-    const cleanBase = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
-    let newKommentar = cleanBase;
-    if (kommentar) {
-      newKommentar = cleanBase
-        ? `[${nowAuthor}] ${kommentar}\n──\n${cleanBase}`
-        : `[${nowAuthor}] ${kommentar}`;
-    }
+    // Immer einen Log-Eintrag schreiben – mit Text oder Standardaktion
+    const actionLabels = { 'Genehmigt': '✓ Genehmigt', 'Abgelehnt': '✕ Abgelehnt',
+                           'Rückfrage': '❓ Rückfrage', 'In Prüfung': '🔍 In Prüfung',
+                           'Eingereicht': '📝 Status zurückgesetzt' };
+    const cleanBase    = prevKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+    const entryText    = kommentar || actionLabels[status] || status;
+    const newKommentar = cleanBase
+      ? `[${nowAuthor}] ${entryText}\n──\n${cleanBase}`
+      : `[${nowAuthor}] ${entryText}`;
 
     // ── Einstimmig-Modus: Teilzustimmung verfolgen ───────────────
     if (status === 'Genehmigt') {
@@ -1297,14 +1300,28 @@ async function saveGremiumDecision(itemId, forceStatus) {
         const genAll = st.genehmiger || [];
         const genD   = genAll.filter(g => g.email.toLowerCase() !== antragAuthorG);
         if (genD.length >= 1) {
-          const approvals = parseApprovals(prevKomRaw);
+          // ── Race-Condition-Schutz: frischen SP-Stand lesen bevor APPROVALS gemergt werden ──
+          let liveKomRaw = prevKomRaw;
+          try {
+            const freshData = await gGet(
+              `/sites/${siteId}/lists/${listAntragId}/items/${itemId}?$expand=fields($select=${COL.gremiumKommentar})`
+            );
+            liveKomRaw = freshData?.fields?.[COL.gremiumKommentar] || prevKomRaw;
+          } catch(_) { /* Fallback auf prevKomRaw */ }
+
+          const approvals = parseApprovals(liveKomRaw);
           if (!approvals.includes(myEmail)) approvals.push(myEmail);
           const allApproved = genD.every(g => approvals.includes(g.email.toLowerCase()));
 
           if (!allApproved) {
-            // Noch nicht alle zugestimmt → Zwischenspeichern
+            // Noch nicht alle zugestimmt → Zwischenspeichern mit Verlaufseintrag
+            const liveClean   = liveKomRaw.replace(/\[APPROVALS:[^\]]*\]\n?/g, '').trim();
+            const partialText = kommentar || '✓ Zugestimmt';
+            const partialBody = liveClean
+              ? `[${nowAuthor}] ${partialText}\n──\n${liveClean}`
+              : `[${nowAuthor}] ${partialText}`;
             const appToken   = `[APPROVALS:${approvals.join('|')}]`;
-            const partialKom = newKommentar ? `${appToken}\n${newKommentar}` : appToken;
+            const partialKom = `${appToken}\n${partialBody}`;
 
             // ── A: Mail NUR nach erfolgreichem PATCH senden ──────
             await gPatch(
@@ -1348,9 +1365,8 @@ async function saveGremiumDecision(itemId, forceStatus) {
     }
 
     // ── Finale Entscheidung speichern ────────────────────────────
-    const fields = { [COL.status]: status };
-    if (newKommentar) fields[COL.gremiumKommentar] = newKommentar;
-    if (auflagen)     fields[COL.auflagen]         = auflagen;
+    const fields = { [COL.status]: status, [COL.gremiumKommentar]: newKommentar };
+    if (auflagen) fields[COL.auflagen] = auflagen;
     if (status === 'Genehmigt') fields[COL.freigabeDatum] = new Date().toISOString().slice(0, 10);
 
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
