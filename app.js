@@ -1153,14 +1153,9 @@ function openAntragPanel(itemId) {
       <div class="panel-field-value${pre ? ' pre' : ''}">${value || '<span style="color:#9ca3af">–</span>'}</div>
     </div>`;
 
-  // Genehmiger-Namen aus Person-Feld auslesen
-  const genehmigerNames = (() => {
-    if (!COL.genehmiger || !f[COL.genehmiger]) return '';
-    const pf = f[COL.genehmiger];
-    if (Array.isArray(pf)) return pf.map(g => g?.LookupValue || String(g)).filter(Boolean).join(', ');
-    if (typeof pf === 'object') return pf?.LookupValue || '';
-    return String(pf);
-  })();
+  // Genehmiger aus aktuellen Einstellungen lesen (nicht aus SP-Item – dort stehen ggf. veraltete Namen)
+  const _stForPanel   = loadSettings();
+  const genehmigerNames = (_stForPanel.genehmiger || []).map(g => g.name || g.email).filter(Boolean).join(', ');
 
   const rows1 = `
     <div class="panel-section">
