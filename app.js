@@ -235,7 +235,6 @@ async function buildSpIdEmailMap() {
       }
     }
     _spIdMapBuilt = true;
-    console.log('✓ spIdToEmail-Map gebaut:', Object.keys(spIdToEmail).length, 'Einträge');
   } catch(e) {
     console.warn('buildSpIdEmailMap fehlgeschlagen:', e.message);
   }
@@ -393,10 +392,8 @@ async function boot() {
             const dn = (col.displayName || '').toLowerCase().trim();
             if (dn === 'genehmiger' || dn === 'approver' || dn === 'approvers') {
               COL.genehmiger = col.name;
-              console.log('✓ Genehmiger-Spalte aufgelöst:', col.name);
             }
           }
-          console.log('✓ Antraege-Spalten:', [...antragCols].sort().join(', '));
         } catch(e) {
           console.warn('Spaltenabruf fehlgeschlagen (kein Filter aktiv):', e.message);
         }
@@ -420,8 +417,6 @@ async function boot() {
             lizenzCols = new Set(
               (lizColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name)
             );
-            console.log('✓ Lizenzen-Spalten:', [...lizenzCols].sort().join(', '));
-            console.log('Lizenzen-Spalten (alle):', (lizColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
 
             for (const col of (lizColData.value || [])) {
               const dn = (col.displayName || '').toLowerCase().trim();
@@ -430,22 +425,18 @@ async function boot() {
                 COL.kiSystem = col.name;
                 const lf = LIZENZ_FIELDS.find(f => f.key === oldKey);
                 if (lf) lf.key = col.name;
-                console.log('✓ KI-System Spalte aufgelöst:', oldKey, '→', col.name);
               }
               if (dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'ki_user') {
                 COL.nutzer = col.name;
-                console.log('✓ KI-User Spalte aufgelöst:', col.name);
               }
               if (dn === 'notizen' || dn === 'notes' || dn === 'bemerkungen') {
                 const oldNot = COL.notizen;
                 COL.notizen = col.name;
                 const lf = LIZENZ_FIELDS.find(f => f.key === oldNot);
                 if (lf) lf.key = col.name;
-                console.log('✓ Notizen Spalte aufgelöst:', oldNot, '→', col.name);
               }
               if (dn === 'zugewiesene nutzer' || dn === 'zugewiesene_nutzer' || dn === 'zugewiesenenutzer') {
                 COL.zugewieseneNutzer = col.name;
-                console.log('✓ ZugewieseneNutzer Spalte aufgelöst:', col.name);
               }
             }
           } catch(eCols) {
@@ -467,22 +458,18 @@ async function boot() {
         try {
           const regColData = await gGet(`/sites/${siteId}/lists/${listRegisterId}/columns?$select=name,displayName,readOnly,hidden&$top=200`);
           registerCols = new Set((regColData.value || []).filter(c => !c.readOnly && !c.hidden).map(c => c.name));
-          console.log('Register-Spalten (alle):', (regColData.value || []).map(c => `${c.name}="${c.displayName}"`).join(' | '));
           for (const col of (regColData.value || [])) {
             const dn = (col.displayName || '').toLowerCase().trim();
             if (dn === 'ki-system' || dn === 'ki system' || dn === 'kisystem' || dn === 'system') {
               COL_REG.kiSystem = col.name;
-              console.log('✓ Register KI-System Spalte:', col.name);
             }
             if (dn === 'nutzer' || dn === 'benutzer' || dn === 'person' || dn === 'mitarbeiter' ||
                 dn === 'ki-user' || dn === 'ki user' || dn === 'kiuser' || dn === 'user' || dn === 'users') {
               COL_REG.nutzer = col.name;
-              console.log('✓ Register Nutzer-Spalte:', col.name);
             }
             if (dn === 'ansprechperson' || dn === 'ansprechpartner' || dn === 'kontakt' ||
                 dn === 'contact' || dn === 'antragsteller') {
               COL_REG.ansprechperson = col.name;
-              console.log('✓ Register Ansprechperson-Spalte:', col.name);
             }
           }
         } catch(e) { console.warn('Register-Spalten fehlgeschlagen:', e.message); }
@@ -597,7 +584,6 @@ async function boot() {
         if (f.Author0LookupId) seedSpUser(f.Author0LookupId, f.Author0EMail || '', '', f.Author0LookupValue || '');
         if (f.Editor0LookupId) seedSpUser(f.Editor0LookupId, f.Editor0EMail || '', '', f.Editor0LookupValue || '');
       }
-      console.log('✓ SP-User-Map nach Seeding:', Object.keys(spUserMap).length, 'Einträge');
     } catch(e) { console.warn('SP-User-Map Seeding fehlgeschlagen:', e.message); }
 
   } catch(e) {
@@ -944,10 +930,6 @@ async function submitAntrag(e) {
   const titleEl = $id(`f-Title`);
   const titleVal = titleEl?.value.trim() || '–';
 
-  // Debug-Ausgabe
-  console.log('antragCols:', antragCols ? [...antragCols].sort().join(', ') : 'null (kein Filter)');
-  console.log('STEP 1 – POST fields:', JSON.stringify({ Title: titleVal }));
-  console.log('STEP 2 – PATCH fields:', JSON.stringify(detailFields));
 
   try {
     // ── Schritt 1: Item mit nur Title erstellen ──────────────────────
@@ -973,7 +955,6 @@ async function submitAntrag(e) {
         if (genIds.length) {
           patchPayload[COL.genehmiger + 'LookupId@odata.type'] = 'Collection(Edm.Int32)';
           patchPayload[COL.genehmiger + 'LookupId'] = genIds;
-          console.log('✓ Genehmiger-LookupIds gesetzt:', genIds);
         }
       } catch(eGen) { console.warn('Genehmiger-LookupId fehlgeschlagen:', eGen.message); }
     }
@@ -1486,7 +1467,6 @@ async function saveGremiumDecision(itemId, forceStatus) {
         if (!antragCols.has(k)) console.warn(`⚠️ saveGremiumDecision: Spalte "${k}" nicht in antragCols – wird SP ignorieren! Verfügbare Spalten: ${[...antragCols].sort().join(', ')}`);
       });
     }
-    console.log('saveGremiumDecision PATCH:', JSON.stringify(fields));
 
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
     const idx = allAntraege.findIndex(i => i.id == itemId);
@@ -1625,41 +1605,6 @@ async function saveGremiumDecision(itemId, forceStatus) {
   }
 }
 
-async function submitRueckfrageAntwort(itemId) {
-  const text = $id('rueck-antwort')?.value?.trim() || '';
-  if (!text) {
-    showToast('Bitte eine Antwort eingeben.', 'error');
-    return;
-  }
-
-  const item = allAntraege.find(i => i.id == itemId);
-  const prevKommentar = item?.fields?.[COL.gremiumKommentar] || '';
-  const now         = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' +
-                      new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
-  const authorName  = (account?.name || account?.username || '').trim();
-  const nowAuthor   = authorName ? `${now} | ${authorName}` : now;
-  const newKommentar = prevKommentar
-    ? `[${nowAuthor}] Antwort: ${text}\n──\n${prevKommentar}`
-    : `[${nowAuthor}] Antwort: ${text}`;
-
-  const fields = {
-    [COL.status]: 'Eingereicht',
-    [COL.gremiumKommentar]: newKommentar,
-  };
-
-  try {
-    await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
-    const idx = allAntraege.findIndex(i => i.id == itemId);
-    if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
-    closePanel();
-    renderAntraege();
-    updateOpenBadge();
-    showToast('Antwort eingereicht.');
-  } catch(e) {
-    showToast('Fehler beim Senden: ' + e.message, 'error');
-  }
-}
-
 // Kommentar von einem normalen User speichern (kein Statuswechsel)
 async function saveUserKommentar(itemId) {
   const btn = document.querySelector(`[onclick="saveUserKommentar(${itemId})"]`);
@@ -1687,13 +1632,45 @@ async function saveUserKommentar(itemId) {
     const newBody       = cleanBase ? `${newEntry}\n──\n${cleanBase}` : newEntry;
     const newKommentar  = appToken ? `${appToken}\n${newBody}` : newBody;
 
+    const isRueckfrageAntwort = item?.fields?.[COL.status] === 'Rückfrage';
+
     const fields = { [COL.gremiumKommentar]: newKommentar };
+    // Rückfrage-Antwort setzt Status automatisch auf Eingereicht
+    if (isRueckfrageAntwort) fields[COL.status] = 'Eingereicht';
+
     await gPatch(`/sites/${siteId}/lists/${listAntragId}/items/${itemId}/fields`, fields);
 
     const idx = allAntraege.findIndex(i => i.id == itemId);
     if (idx >= 0) Object.assign(allAntraege[idx].fields, fields);
 
-    showToast('💬 Kommentar gespeichert.');
+    showToast(isRueckfrageAntwort ? '✓ Antwort auf Rückfrage eingereicht.' : '💬 Kommentar gespeichert.');
+
+    // Bei Rückfrage-Antwort: Genehmiger per E-Mail benachrichtigen
+    if (isRueckfrageAntwort) {
+      const _st = loadSettings();
+      if (_st.benachrichtigung?.beiEinreichung !== false) {
+        const genehmiger = getGenehmiger();
+        const senderName = displayName || (account?.username || '');
+        const antragTitle = item?.fields?.Title || '';
+        const deepUrl = `${location.origin}${location.pathname}?antrag=${itemId}`;
+        sendMail(
+          genehmiger.map(g => ({ address: g.email, name: g.name })),
+          `[KI-Antrag] #${itemId} ${antragTitle} – Rückfrage beantwortet`,
+          mailTemplate(
+            'Rückfrage wurde beantwortet',
+            [
+              ['KI-System',   antragTitle],
+              ['Beantwortet von', senderName],
+              ['Kommentar',   text],
+              ['Datum',       new Date().toLocaleDateString('de-DE')],
+            ],
+            '💬 Antwort im Dashboard ansehen',
+            deepUrl
+          )
+        ).catch(e => console.warn('Mail an Genehmiger (Rückfrage-Antwort) fehlgeschlagen:', e.message));
+      }
+    }
+
     openAntragPanel(itemId);  // Panel neu rendern (frische Daten aus allAntraege)
   } catch(e) {
     showToast('Fehler beim Speichern: ' + e.message, 'error');
@@ -2093,7 +2070,6 @@ async function selectPersonFromDrop(el) {
       const spId = await ensureSpUserViaRest(email);
       if (spId) {
         user.spId = spId;
-        console.log('✓ SP-User-ID aufgelöst:', name, '→', spId);
       } else {
         console.warn('⚠ SP-User-ID nicht aufgelöst:', name, email, '– wird ggf. beim Speichern nochmals versucht');
       }
@@ -2304,7 +2280,6 @@ async function saveLizenz() {
     if (lookupIds.length > 0) {
       detailFields[nutzerOdataKey]  = 'Collection(Edm.Int32)';
       detailFields[nutzerLookupKey] = lookupIds;
-      console.log('SP-User LookupIds (Graph-Format):', JSON.stringify(lookupIds));
     } else {
       console.warn('Keine SP-LookupIds aufgelöst – User-Feld wird nicht gesetzt');
     }
@@ -2315,8 +2290,6 @@ async function saveLizenz() {
   }
   if (colOk(COL.lizenzBelegt)) detailFields[COL.lizenzBelegt] = lizenzUsers.length;
 
-  console.log('saveLizenz – lizenzCols:', lizenzCols ? [...lizenzCols].sort().join(',') : 'null');
-  console.log('saveLizenz – Title:', kiSysVal, '| detailFields:', JSON.stringify(detailFields));
 
   // Hilfsfunktion: PATCH-Versuch, bei Fehler feldweise retry
   // @odata.type-Annotationen werden immer zusammen mit dem Hauptfeld übertragen
@@ -2451,7 +2424,6 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
         const spId = firstUser.spId || await resolveSpUserId(firstUser.email, firstUser.name);
         if (spId) {
           pf[COL_REG.nutzer + 'LookupId'] = spId;   // Single-Value → plain integer (kein Collection)
-          console.log('✓ Register Nutzer Person-LookupId:', spId);
         }
       } catch(eNU) { console.warn('Register Nutzer LookupId fehlgeschlagen:', eNU.message); }
     }
@@ -2464,7 +2436,6 @@ async function createRegisterEntries(kiSystem, users, lizenzItemId) {
           : await resolveSpUserId(af.Author0EMail || '', af.Author0LookupValue || '');
         if (authorId) {
           pf[COL_REG.ansprechperson + 'LookupId'] = authorId;
-          console.log('✓ Register Ansprechperson (Antragsteller) LookupId:', authorId);
         }
       } catch(eAsp) { console.warn('Register Ansprechperson LookupId fehlgeschlagen:', eAsp.message); }
     }
