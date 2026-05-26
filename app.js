@@ -1399,8 +1399,8 @@ async function saveGremiumDecision(itemId, forceStatus) {
 
     // ── A: Antragsteller-Mail NUR nach erfolgreichem PATCH ────────
     if ((status === 'Genehmigt' || status === 'Abgelehnt' || status === 'Rückfrage') && antragAfter) {
-      const authorEmail = antragAfter.fields?.Author0EMail || '';
-      const authorName  = antragAfter.fields?.Author0LookupValue || authorEmail;
+      const authorEmail = antragAfter.createdBy?.user?.email || antragAfter.fields?.Author0EMail || '';
+      const authorName  = antragAfter.fields?.Author0LookupValue || antragAfter.createdBy?.user?.displayName || authorEmail;
       const deepUrl     = `${location.origin}${location.pathname}?antrag=${antragAfter.id}`;
 
       if (st.benachrichtigung?.beiEntscheidung !== false && authorEmail) {
@@ -1518,8 +1518,11 @@ async function saveGremiumDecision(itemId, forceStatus) {
   } catch(e) {
     showToast('Fehler beim Speichern: ' + e.message, 'error');
   } finally {
-    // ── D: Buttons immer wieder freigeben (auch bei Fehler) ──────
-    actionBtns.forEach(b => { b.disabled = false; });
+    // ── D: Buttons freigeben – btn-rueckfrage nur wenn Kommentar vorhanden ──
+    const hasKommentar = !!$id('pg-kommentar')?.value?.trim();
+    actionBtns.forEach(b => {
+      b.disabled = (b.id === 'btn-rueckfrage') ? !hasKommentar : false;
+    });
   }
 }
 
