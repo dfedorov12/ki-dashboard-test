@@ -1277,6 +1277,13 @@ async function saveGremiumDecision(itemId, forceStatus) {
       return;
     }
 
+    // Rückfrage erfordert Kommentar
+    if (status === 'Rückfrage' && !kommentar) {
+      showToast('Bitte Kommentar eingeben – eine Rückfrage muss begründet werden.', 'error');
+      $id('pg-kommentar')?.focus();
+      return;
+    }
+
     const prevKomRaw    = prevItem?.fields?.[COL.gremiumKommentar] || '';
     const now           = new Date().toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric'})
                         + ' ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
