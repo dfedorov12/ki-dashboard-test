@@ -517,7 +517,27 @@ async function boot() {
     // Fallback: wenn noch keine Liste konfiguriert → SP-Lizenzen-Zugriff (Bootstrapping)
     isAdmin = (account?.username || '').toLowerCase() === ADMIN_UPN.toLowerCase();
     const _myUpn  = (account?.username || '').toLowerCase();
-    const _genCfg = getGenehmiger();   // nutzt _genehmigerLive (aus SP) falls bereits geladen
+
+    // ── Admin-Sync: localStorage gewinnt gegen veralteten SP-Config-Stand ──
+    // Szenario: Admin hat Genehmiger in localStorage aktualisiert, aber SP-Config-Schreiben
+    // schlug damals fehl (oder wurde vor dem SP-Config-Feature angelegt → SP hat alte Daten).
+    // → localStorage ist autoritativ für Admin; bei Abweichung: sofort in SP korrigieren.
+    if (isAdmin) {
+      const _localGen = loadSettings().genehmiger || [];
+      const _spGen    = _genehmigerLive || [];
+      if (_localGen.length > 0) {
+        const _localEmails = _localGen.map(g => (g.email || '').toLowerCase()).sort().join('|');
+        const _spEmails    = _spGen.map(g => (g.email || '').toLowerCase()).sort().join('|');
+        if (_localEmails !== _spEmails) {
+          console.log('⚙ Admin-Sync: localStorage-Genehmiger ≠ SP-Config → überschreibe SP...',
+            _localGen.map(g => g.email).join(', '));
+          _genehmigerLive = _localGen;
+          saveSPConfig(_localGen).catch(e => console.warn('Admin-Sync SP-Config fehlgeschlagen:', e.message));
+        }
+      }
+    }
+
+    const _genCfg = getGenehmiger();   // nutzt _genehmigerLive (ggf. gerade korrigiert)
     if (_genCfg.length > 0) {
       isGremium = isAdmin || _genCfg.some(g => (g.email || '').toLowerCase() === _myUpn);
     } else {
