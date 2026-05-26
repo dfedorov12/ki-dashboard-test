@@ -631,7 +631,7 @@ async function refreshCurrentView() {
     else if (currentView === 'register') await loadRegister();
     showToast('Daten aktualisiert');
   } catch(e) {
-    showToast('Fehler beim Aktualisieren: ' + e.message, 'error');
+    showToast('Fehler beim Aktualisieren: ' + esc(e.message), 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('refreshing'); }
   }
@@ -1005,7 +1005,7 @@ async function submitAntrag(e) {
       ).then(() => showToast('📧 Genehmiger wurden automatisch benachrichtigt.'))
        .catch(e => {
          console.warn('Mail an Genehmiger fehlgeschlagen:', e.message);
-         showToast('Antrag eingereicht – E-Mail-Benachrichtigung fehlgeschlagen (' + e.message + ')', 'error', 7000);
+         showToast('Antrag eingereicht – E-Mail-Benachrichtigung fehlgeschlagen (' + esc(e.message) + ')', 'error', 7000);
        });
     }
     s.classList.remove('hidden');
@@ -1296,7 +1296,7 @@ function openAntragPanel(itemId) {
           <button class="btn btn-success btn-sm" ${myApprovedAlready ? 'disabled' : ''} onclick="saveGremiumDecision(${item.id},'Genehmigt')">${showApprovalTracker && !myApprovedAlready ? '✓ Zustimmen' : showApprovalTracker && myApprovedAlready ? '✓ Bereits zugestimmt' : '✓ Genehmigen'}</button>
           <button class="btn btn-danger btn-sm" onclick="saveGremiumDecision(${item.id},'Abgelehnt')">✕ Ablehnen</button>
           <button id="btn-rueckfrage" class="btn btn-neutral btn-sm" disabled title="Bitte zuerst einen Kommentar eingeben" onclick="saveGremiumDecision(${item.id},'Rückfrage')">? Rückfrage</button>
-          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},'${f[COL.status] || 'In Prüfung'}')">💾 Kommentar speichern</button>
+          <button class="btn btn-neutral btn-sm" onclick="saveGremiumDecision(${item.id},${JSON.stringify(STATUS_OPTS.includes(f[COL.status]) ? f[COL.status] : 'In Prüfung')})">💾 Kommentar speichern</button>
         </div>
         ${einstimmig ? '<div style="font-size:.75rem;color:#6b7280;margin-top:6px">ℹ️ Eine Ablehnung ist sofort final – unabhängig vom Einstimmig-Modus.</div>' : ''}
       `}
@@ -1516,7 +1516,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
         ).then(() => showToast(`📧 ${authorName || authorEmail} automatisch benachrichtigt.`))
          .catch(e => {
            console.warn('Mail an Antragsteller fehlgeschlagen:', e.message);
-           showToast('Entscheidung gespeichert – E-Mail fehlgeschlagen: ' + e.message, 'error', 7000);
+           showToast('Entscheidung gespeichert – E-Mail fehlgeschlagen: ' + esc(e.message), 'error', 7000);
          });
       }
 
@@ -1595,7 +1595,7 @@ async function saveGremiumDecision(itemId, forceStatus) {
     updateOpenBadge();
 
   } catch(e) {
-    showToast('Fehler beim Speichern: ' + e.message, 'error');
+    showToast('Fehler beim Speichern: ' + esc(e.message), 'error');
   } finally {
     // ── D: Buttons freigeben – btn-rueckfrage nur wenn Kommentar vorhanden ──
     const hasKommentar = !!$id('pg-kommentar')?.value?.trim();
@@ -1673,7 +1673,7 @@ async function saveUserKommentar(itemId) {
 
     openAntragPanel(itemId);  // Panel neu rendern (frische Daten aus allAntraege)
   } catch(e) {
-    showToast('Fehler beim Speichern: ' + e.message, 'error');
+    showToast('Fehler beim Speichern: ' + esc(e.message), 'error');
     if (btn) { btn.disabled = false; btn.textContent = '💬 Kommentar senden'; }
   }
 }
@@ -2481,7 +2481,7 @@ async function deleteLizenz(itemId) {
     allLizenzen = [];
     await loadLizenzen();
   } catch(e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Fehler: ' + esc(e.message), 'error');
   }
 }
 
@@ -2707,7 +2707,7 @@ async function refreshPanel() {
     openAntragPanel(currentPanelItemId);
     showToast('Antrag aktualisiert');
   } catch(e) {
-    showToast('Fehler beim Aktualisieren: ' + e.message, 'error');
+    showToast('Fehler beim Aktualisieren: ' + esc(e.message), 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove('refreshing'); }
   }
@@ -2778,6 +2778,8 @@ function showToast(msg, type = 'success', duration = 4000) {
   }
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
+  // Nur einfache Text-Toasts über textContent (sicher); HTML-Toasts explizit über innerHTML
+  // Alle dynamischen Inhalte (e.message etc.) werden vor Aufruf per esc() bereinigt
   toast.innerHTML = msg;
   container.appendChild(toast);
   requestAnimationFrame(() => { requestAnimationFrame(() => toast.classList.add('toast-show')); });
@@ -2812,7 +2814,12 @@ function spDisplayValue(type, v) {
 
 function esc(s) {
   if (s === null || s === undefined) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');  // Single-quote: verhindert Attributkontext-Ausbruch in onclick='...'
 }
 
 function fmtDate(s) {
@@ -3173,7 +3180,7 @@ async function renderAttachments(itemId) {
       const isGrem = isGremium;
       return `<div class="att-item">
         <a class="att-name" href="${esc(url)}" target="_blank" rel="noopener">📄 ${esc(fname)}</a>
-        ${isGrem ? `<button class="att-del" onclick="attDelete(${itemId},'${esc(fname.replace(/'/g, "\\'"))}')">✕</button>` : ''}
+        ${isGrem ? `<button class="att-del" data-item="${itemId}" data-fname="${esc(fname)}" onclick="attDelete(this.dataset.item, this.dataset.fname)">✕</button>` : ''}
       </div>`;
     }).join('');
   } catch(e) {
@@ -3189,7 +3196,7 @@ async function attDelete(itemId, fileName) {
     showToast(`✓ „${fileName}" gelöscht.`);
     await renderAttachments(itemId);
   } catch(e) {
-    showToast(`Fehler beim Löschen: ${e.message}`, 'error');
+    showToast(`Fehler beim Löschen: ${esc(e.message)}`, 'error');
   }
 }
 
@@ -3201,13 +3208,13 @@ async function attUploadFiles(itemId, files) {
   let uploaded = 0, failed = 0;
   for (const file of files) {
     if (file.size > MAX_MB * 1024 * 1024) {
-      showToast(`„${file.name}" ist zu groß (max. ${MAX_MB} MB).`, 'error'); failed++; continue;
+      showToast(`„${esc(file.name)}" ist zu groß (max. ${MAX_MB} MB).`, 'error'); failed++; continue;
     }
     try {
       await uploadAttachment(itemId, file);
       uploaded++;
     } catch(e) {
-      showToast(`Fehler bei „${file.name}": ${e.message}`, 'error'); failed++;
+      showToast(`Fehler bei „${esc(file.name)}": ${esc(e.message)}`, 'error'); failed++;
     }
   }
   if (dropEl) dropEl.classList.remove('att-uploading');
