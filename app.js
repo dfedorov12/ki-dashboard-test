@@ -151,6 +151,107 @@ let lizenzCols  = null;  // analog für KI_Lizenzen
 let _cacheTs = { antraege: 0, lizenzen: 0, register: 0 };
 const CACHE_TTL = 5 * 60 * 1000;  // 5 Minuten
 
+// ── Testumgebungs-Flag ───────────────────────────────────────────
+// Aktiviert testexklusive Features (z.B. KI-Vorschläge) nur auf der
+// GitHub-Pages-Test-URL; Live-Umgebung bleibt unberührt.
+const IS_TEST_ENV = location.pathname.startsWith('/ki-dashboard-test');
+
+// ── KI-Vorschläge (Testumgebung) – vorbefüllte Beispieldatensätze ──
+// Feldschlüssel entsprechen den SP-internen Namen (COL.*).
+// Hinweis: COL.* sind zu diesem Zeitpunkt bereits als Strings definiert.
+const KI_VORSCHLAEGE = [
+  {
+    icon: '🤖', name: 'ChatGPT (OpenAI)',
+    kategorie: 'Normales Risiko',
+    felder: {
+      Title: 'ChatGPT – KI-Assistent für Textgenerierung',
+      VerantwortlicheStelle: 'IT-Abteilung',
+      Hersteller: 'OpenAI / Microsoft Azure',
+      KIKomponenten: 'Großes Sprachmodell (GPT-4o), konversationsbasierte Schnittstelle; Funktionen: Texterstellung, Zusammenfassung, Übersetzung, Code-Unterstützung.',
+      VerwendungszweckHersteller: 'Allgemeiner KI-Assistent zur Unterstützung bei Schreib- und Analyseaufgaben (laut OpenAI-Nutzungsbedingungen, Stand 2025).',
+      AnwendungsbereichUnternehmen: 'Interne Nutzung für Textentwürfe, E-Mail-Formulierungen und Recherche. Kein Einsatz mit personenbezogenen Daten oder Geschäftsgeheimnissen ohne Enterprise-Datenschutzoption.',
+      Risikokategorie: 'Normales Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'Je Abteilung ein Key User; Schulung über internes E-Learning-Modul (ca. 2 h).',
+    }
+  },
+  {
+    icon: '💼', name: 'Microsoft 365 Copilot',
+    kategorie: 'Normales Risiko',
+    felder: {
+      Title: 'Microsoft 365 Copilot – KI-Integration Office',
+      VerantwortlicheStelle: 'IT-Abteilung',
+      Hersteller: 'Microsoft Corporation',
+      KIKomponenten: 'GPT-4o-basiertes Modell; integriert in Word, Excel, Outlook, Teams. Verarbeitung von Unternehmensdaten im DIHAG-Microsoft-365-Tenant.',
+      VerwendungszweckHersteller: 'KI-gestützte Produktivitätserweiterung für Microsoft-365-Anwendungen (laut Microsoft-Produktdokumentation).',
+      AnwendungsbereichUnternehmen: 'Dokumenterstellung, Datenzusammenfassung in Excel, E-Mail-Entwürfe und Meeting-Protokolle in Teams. Daten verbleiben im DIHAG-Tenant (EU-Region).',
+      Risikokategorie: 'Normales Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'IT-Multiplikator je Standort; Microsoft-Schulungspaket + interne Kurzschulung (1 h).',
+    }
+  },
+  {
+    icon: '💻', name: 'GitHub Copilot',
+    kategorie: 'Geringes Risiko',
+    felder: {
+      Title: 'GitHub Copilot – KI-Codierungsassistent',
+      VerantwortlicheStelle: 'IT-Abteilung / Softwareentwicklung',
+      Hersteller: 'GitHub (Microsoft)',
+      KIKomponenten: 'Codex/GPT-4-basiertes Modell; IDE-Integration (VS Code, JetBrains). Funktionen: Code-Autocomplete, Vorschläge, Kommentare.',
+      VerwendungszweckHersteller: 'KI-gestützte Code-Vorschläge und automatische Vervollständigung in Entwicklungsumgebungen (laut GitHub-Dokumentation).',
+      AnwendungsbereichUnternehmen: 'Beschleunigung der internen Softwareentwicklung. Kein Upload von Code mit Geschäftsgeheimnissen ohne Enterprise-Datenschutzoption (Telemetrie deaktiviert).',
+      Risikokategorie: 'Geringes Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'Entwickler-Team; Onboarding über GitHub-Dokumentation (selbstgesteuert).',
+    }
+  },
+  {
+    icon: '📊', name: 'Salesforce Einstein AI',
+    kategorie: 'Hohes Risiko',
+    felder: {
+      Title: 'Salesforce Einstein AI – CRM-Analyse & Prognosen',
+      VerantwortlicheStelle: 'Vertrieb / IT-Abteilung',
+      Hersteller: 'Salesforce Inc.',
+      KIKomponenten: 'ML-basierte Prognosemodelle; Opportunity Scoring, Lead-Priorisierung, NLP für CRM-Kundendaten.',
+      VerwendungszweckHersteller: 'KI-gestützte Analyse von Kundendaten für Verkaufsprognosen und Empfehlungen (laut Salesforce-Produktdokumentation).',
+      AnwendungsbereichUnternehmen: 'Automatische Priorisierung von Vertriebschancen. Verarbeitung von Kundendaten erfordert DSGVO-Prüfung und Auftragsverarbeitungsvertrag mit Salesforce. Menschliche Prüfung vor jeder Entscheidung.',
+      Risikokategorie: 'Hohes Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'Vertriebsleiter als Key User; Salesforce-Schulungsprogramm (Trailhead) + interne Einführung.',
+    }
+  },
+  {
+    icon: '🎨', name: 'Adobe Firefly',
+    kategorie: 'Geringes Risiko',
+    felder: {
+      Title: 'Adobe Firefly – KI-Bildgenerierung',
+      VerantwortlicheStelle: 'Marketing / Unternehmenskommunikation',
+      Hersteller: 'Adobe Inc.',
+      KIKomponenten: 'Diffusionsmodell zur Bildgenerierung; trainiert auf lizenzierten Adobe-Stock-Daten. Integriert in Creative Cloud (Photoshop, Illustrator).',
+      VerwendungszweckHersteller: 'Generierung von Bildern, Grafiken und Design-Varianten für kreative Workflows (laut Adobe).',
+      AnwendungsbereichUnternehmen: 'Erstellung von Marketing-Bildmaterial und Präsentationsgrafiken. Outputs als KI-generiert kennzeichnen. Kein Einsatz mit Personenbildern ohne Einwilligung.',
+      Risikokategorie: 'Geringes Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'Grafikdesigner als Key User; Adobe-Schulungsmaterial (selbstgesteuert).',
+    }
+  },
+  {
+    icon: '🏭', name: 'SAP AI Core – Predictive Maintenance',
+    kategorie: 'Hohes Risiko',
+    felder: {
+      Title: 'SAP AI Core – Predictive Maintenance Gießerei',
+      VerantwortlicheStelle: 'Produktion / IT-Abteilung',
+      Hersteller: 'SAP SE',
+      KIKomponenten: 'ML-Modelle für vorausschauende Wartung; Integration mit SAP S/4HANA, Sensordatenanalyse, Anomalie-Erkennung an Gießereimaschinen.',
+      VerwendungszweckHersteller: 'KI-gestützte Vorhersage von Maschinenwartungsbedarfen auf Basis von Sensordaten (laut SAP-Produktdokumentation).',
+      AnwendungsbereichUnternehmen: 'Früherkennung von Maschinenausfällen in der Produktion. Modell beeinflusst Wartungsplanung – menschliche Prüfung durch Instandhaltungsmeister vor jeder Entscheidung zwingend erforderlich.',
+      Risikokategorie: 'Hohes Risiko',
+      InterneExterneNutzung: 'Intern',
+      KompetenzmassnahmeKeyUser: 'Produktionsleiter und Instandhaltungsmeister als Key User; SAP-Schulungsprogramm (2 Tage vor Ort).',
+    }
+  },
+];
+
 // ═══════════════════════════════════════════════════════════════════
 // MSAL AUTH
 // ═══════════════════════════════════════════════════════════════════
@@ -619,6 +720,59 @@ async function switchView(view) {
   if (view === 'lizenzen') await loadLizenzen();
   if (view === 'register') await loadRegister();
   if (view === 'einstellungen') renderEinstellungen();
+
+  if (view === 'antrag') renderKiVorschlaege();
+  else hideKiVorschlaege();
+}
+
+// ── KI-Vorschläge Sidebar (nur Testumgebung) ────────────────────────
+function renderKiVorschlaege() {
+  if (!IS_TEST_ENV) return;
+  let sidebar = $id('ki-vorschlaege-sidebar');
+  if (!sidebar) {
+    sidebar = document.createElement('div');
+    sidebar.id = 'ki-vorschlaege-sidebar';
+    $id('view-antrag').appendChild(sidebar);
+  }
+  $id('view-antrag')?.classList.add('ki-vorschlaege-active');
+  sidebar.innerHTML = `
+    <div class="ki-test-badge">🧪 Testumgebung</div>
+    <div class="ki-sidebar-title" style="font-size:.8rem;font-weight:700;color:#1e2939;margin:8px 0 2px;">💡 KI-Vorschläge</div>
+    <div class="ki-sidebar-sub" style="font-size:.69rem;color:#6b7280;margin-bottom:10px;line-height:1.4;">Klicken zum Ausfüllen der Grunddaten</div>
+    ${KI_VORSCHLAEGE.map((v, i) => `
+      <div class="ki-vorschlag-card" onclick="applyKiVorschlag(${i})">
+        <div class="ki-vorschlag-top">
+          <span class="ki-vorschlag-icon">${v.icon}</span>
+          <span class="ki-vorschlag-name">${esc(v.name)}</span>
+        </div>
+        ${riskBadge(v.kategorie)}
+        <div class="ki-vorschlag-hint">Felder vorausfüllen →</div>
+      </div>
+    `).join('')}`;
+}
+
+function hideKiVorschlaege() {
+  $id('ki-vorschlaege-sidebar')?.remove();
+  $id('view-antrag')?.classList.remove('ki-vorschlaege-active');
+}
+
+function applyKiVorschlag(idx) {
+  const v = KI_VORSCHLAEGE[idx];
+  if (!v) return;
+  for (const [key, value] of Object.entries(v.felder)) {
+    const el = $id(`f-${key}`);
+    if (!el) continue;
+    el.value = value;
+    el.classList.remove('invalid');
+    if (el.tagName === 'TEXTAREA') {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+  }
+  document.querySelectorAll('.ki-vorschlag-card').forEach(c => c.classList.remove('ki-vorschlag-selected'));
+  document.querySelectorAll('.ki-vorschlag-card')[idx]?.classList.add('ki-vorschlag-selected');
+  $id('antrag-main-col')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showToast(`✓ Grunddaten für „${esc(v.name)}" übernommen`);
 }
 
 async function refreshCurrentView() {
